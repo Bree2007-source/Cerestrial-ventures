@@ -1,0 +1,14 @@
+const products = [
+  { _id:'1', name:'Mumias Sugar 2kg', image:'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=500', description:'Premium white sugar.', brand:'Mumias', category:'Sugar', retailPrice:230, wholesalePrice:210, countInStock:50, rating:4.5, numReviews:20 },
+  { _id:'2', name:'Pishori Rice 5kg', image:'https://images.unsplash.com/photo-1536304929831-ee1ca9d44906?w=500', description:'Premium Pishori rice.', brand:'Kenya Rice', category:'Rice', retailPrice:750, wholesalePrice:700, countInStock:30, rating:4.8, numReviews:15 },
+  { _id:'3', name:'Elianto Cooking Oil 2L', image:'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=500', description:'Pure sunflower oil.', brand:'Elianto', category:'Cooking Oil', retailPrice:480, wholesalePrice:450, countInStock:40, rating:4.6, numReviews:18 },
+  { _id:'4', name:'Jogoo Maize Flour 2kg', image:'https://images.unsplash.com/photo-1574323347407-f5e1ad6d020b?w=500', description:'Finely ground maize flour.', brand:'Jogoo', category:'Maize Flour', retailPrice:180, wholesalePrice:160, countInStock:60, rating:4.7, numReviews:25 },
+  { _id:'5', name:'Exe Wheat Flour 2kg', image:'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=500', description:'Premium wheat flour.', brand:'Exe', category:'Wheat Flour', retailPrice:210, wholesalePrice:190, countInStock:45, rating:4.5, numReviews:12 },
+  { _id:'6', name:'Quaker Oats 500g', image:'https://images.unsplash.com/photo-1495214783159-3503fd1b572d?w=500', description:'Nutritious rolled oats.', brand:'Quaker', category:'Cereals', retailPrice:280, wholesalePrice:255, countInStock:35, rating:4.9, numReviews:30 },
+  { _id:'7', name:'Lays Crisps 100g', image:'https://images.unsplash.com/photo-1566478989037-eec170784d0b?w=500', description:'Crispy potato chips.', brand:'Lays', category:'Snacks', retailPrice:80, wholesalePrice:65, countInStock:100, rating:4.4, numReviews:40 },
+  { _id:'8', name:'Tusker Malt 500ml', image:'https://images.unsplash.com/photo-1624552184280-9e9b8832f1c7?w=500', description:'Refreshing malt beverage.', brand:'Tusker', category:'Beverages', retailPrice:120, wholesalePrice:100, countInStock:80, rating:4.6, numReviews:22 },
+  { _id:'9', name:'Ariel Detergent 1kg', image:'https://images.unsplash.com/photo-1585264550248-1778be3b5678?w=500', description:'Powerful laundry detergent.', brand:'Ariel', category:'Cleaning Products', retailPrice:320, wholesalePrice:290, countInStock:25, rating:4.7, numReviews:17 },
+  { _id:'10', name:'Pampers Diapers Size 3', image:'https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?w=500', description:'Soft baby diapers.', brand:'Pampers', category:'Baby Products', retailPrice:950, wholesalePrice:900, countInStock:20, rating:4.9, numReviews:35 },
+]
+
+export default products
