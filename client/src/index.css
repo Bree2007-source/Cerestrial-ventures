@@ -1,1 +1,38 @@
+:root {
+  color-scheme: light;
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --nav-bg: #ffffff;
+  --nav-border: rgba(148,163,184,0.25);
+  --active-bg: rgba(22,163,74,0.12);
+  --brand: #15803d;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b1120;
+  --surface: #111827;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --nav-bg: #111827;
+  --nav-border: rgba(148,163,184,0.15);
+  --active-bg: rgba(22,163,74,0.18);
+  --brand: #4ade80;
+}
+
+html, body, #root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  transition: background-color 0.2s ease, color 0.2s ease;
+  padding-bottom: 92px;
+}
+
 @import "tailwindcss";

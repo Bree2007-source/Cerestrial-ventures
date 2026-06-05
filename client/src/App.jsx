@@ -1,31 +1,42 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import React, { useState } from "react";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 
 import Home from "./pages/Home";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
-import Cart from "./pages/Cart";
 import CartPage from "./pages/CartPage";
 import Checkout from "./pages/Checkout";
 import OrderTracking from "./pages/OrderTracking";
+import Orders from "./pages/Orders";
 import TrackOrder from "./pages/TrackOrder";
 import ProductPage from "./pages/ProductPage";
 import CategoriesPage from "./pages/CategoriesPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import Profile from "./pages/Profile";
+import Wishlist from "./pages/Wishlist";
 
-import { AuthContext } from "./context/AuthContext";
-import { CartContext } from "./context/CartContext";
-import { ThemeContext } from "./context/ThemeContext";
+import { AuthProvider } from "./context/AuthContext";
+import { CartProvider } from "./context/CartContext";
+import { ThemeProvider } from "./context/ThemeContext";
 
 import ProtectedRoute from "./components/ProtectedRoute";
+import BottomNav from "./components/BottomNav";
+import Header from "./components/Header";
 
-function App() {
+function AppRoutes() {
+  const location = useLocation();
+  const hiddenPaths = ['/login', '/register', '/admin'];
+  const [selectedCategory, setSelectedCategory] = useState('All');
+
   return (
-    <BrowserRouter>
+    <div style={{ minHeight: '100vh', paddingBottom: '92px' }}>
+      {!hiddenPaths.includes(location.pathname) && (
+        <Header selectedCategory={selectedCategory} setSelectedCategory={setSelectedCategory} />
+      )}
       <Routes>
         {/* Public routes */}
-        <Route path="/" element={<Home />} />
+        <Route path="/" element={<Home selectedCategory={selectedCategory} />} />
         <Route path="/home" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
@@ -37,8 +48,9 @@ function App() {
         <Route element={<ProtectedRoute />}>
           <Route path="/cart" element={<CartPage />} />
           <Route path="/checkout" element={<Checkout />} />
-          <Route path="/orders" element={<OrderTracking />} />
+          <Route path="/orders" element={<Orders />} />
           <Route path="/profile" element={<Profile />} />
+          <Route path="/wishlist" element={<Wishlist />} />
         </Route>
 
         {/* Admin route */}
@@ -46,8 +58,24 @@ function App() {
           <Route path="/admin" element={<AdminDashboard />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+
+      {!hiddenPaths.includes(location.pathname) && <BottomNav />}
+    </div>
   );
 }
 
-export default App;
+function App() {
+  return (
+    <ThemeProvider>
+      <AuthProvider>
+        <CartProvider>
+          <BrowserRouter>
+            <AppRoutes />
+          </BrowserRouter>
+        </CartProvider>
+      </AuthProvider>
+    </ThemeProvider>
+  );
+}
+
+export default App; 

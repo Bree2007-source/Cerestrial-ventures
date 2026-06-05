@@ -6,6 +6,7 @@ const AdminDashboard = () => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [analytics, setAnalytics] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [imageFile, setImageFile] = useState(null);
@@ -18,30 +19,54 @@ const AdminDashboard = () => {
     name: '', category: '', retailPrice: '', wholesalePrice: '',
     countInStock: '', description: '', brand: '', image: ''
   });
+  const [promotionSubject, setPromotionSubject] = useState('');
+  const [promotionMessage, setPromotionMessage] = useState('');
+  const [sendingPromotion, setSendingPromotion] = useState(false);
+  const [promotionResult, setPromotionResult] = useState('');
 
   const categories = [
     'Sugar', 'Rice', 'Cooking Oil', 'Maize Flour', 'Wheat Flour',
     'Cereals', 'Snacks', 'Beverages', 'Cleaning Products', 'Baby Products'
   ];
 
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('cv-token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
   // ── Fetch data ────────────────────────────────────────────────
   const fetchOrders = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/orders');
+      const res = await fetch('http://localhost:5000/api/orders', {
+        headers: { ...getAuthHeaders() },
+      });
       if (res.ok) setOrders(await res.json());
       else setError('Failed to fetch orders.');
     } catch { setError('Cannot connect to backend.'); }
     finally { setLoading(false); }
   };
 
+  const fetchAnalytics = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/admin/analytics', {
+        headers: { ...getAuthHeaders() },
+      });
+      if (res.ok) setAnalytics(await res.json());
+    } catch {
+      console.warn('Unable to load analytics')
+    }
+  };
+
   const fetchProducts = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/products');
+      const res = await fetch('http://localhost:5000/api/products', {
+        headers: { ...getAuthHeaders() },
+      });
       if (res.ok) setProducts(await res.json());
     } catch { console.error('Cannot load products'); }
   };
 
-  useEffect(() => { fetchOrders(); fetchProducts(); }, []);
+  useEffect(() => { fetchOrders(); fetchProducts(); fetchAnalytics(); }, []);
 
   // ── Image selection ───────────────────────────────────────────
   const handleImageSelect = (e) => {
@@ -101,7 +126,10 @@ const AdminDashboard = () => {
 
       const res = await fetch(url, {
         method: editingProduct ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
         body: JSON.stringify({
           ...formData,
           image: imageUrl,
@@ -130,8 +158,15 @@ const AdminDashboard = () => {
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Delete "${name}"?`)) return;
     try {
-      const res = await fetch(`http://localhost:5000/api/products/${id}`, { method: 'DELETE' });
+      const res = await fetch(`http://localhost:5000/api/products/${id}`, {
+        method: 'DELETE',
+        headers: { ...getAuthHeaders() },
+      });
       if (res.ok) { alert('🗑️ Deleted!'); fetchProducts(); }
+      else {
+        const data = await res.json();
+        alert('❌ Error: ' + (data.message || 'Unable to delete product.'))
+      }
     } catch { alert('Connection error.'); }
   };
 
@@ -161,15 +196,60 @@ const AdminDashboard = () => {
     });
   };
 
+  const handleSendPromotion = async () => {
+    if (!promotionSubject.trim() || !promotionMessage.trim()) {
+      alert('Please enter both subject and message for the promotion.');
+      return;
+    }
+
+    setSendingPromotion(true);
+    setPromotionResult('Sending promotion...');
+
+    try {
+      const res = await fetch('http://localhost:5000/api/products/promotions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          subject: promotionSubject,
+          message: promotionMessage,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setPromotionResult(`Promotion sent to ${data.recipients} users.`);
+        setPromotionSubject('');
+        setPromotionMessage('');
+      } else {
+        setPromotionResult(`Error: ${data.message || 'Unable to send promotion.'}`);
+      }
+    } catch (error) {
+      setPromotionResult('Network error while sending promotion.');
+    } finally {
+      setSendingPromotion(false);
+      window.setTimeout(() => setPromotionResult(''), 5000);
+    }
+  };
+
   // ── Update order status ───────────────────────────────────────
   const handleStatusChange = async (orderId, newStatus) => {
     try {
       const res = await fetch(`http://localhost:5000/api/orders/${orderId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
         body: JSON.stringify({ status: newStatus }),
       });
       if (res.ok) { fetchOrders(); }
+      else {
+        const data = await res.json();
+        alert('❌ Error updating status: ' + (data.message || 'Try again.'))
+      }
     } catch { alert('Connection error.'); }
   };
 
@@ -202,9 +282,9 @@ const AdminDashboard = () => {
         </div>
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           {[
-            { label: 'Total Sales', value: `KSh ${totalRevenue.toLocaleString()}` },
+            { label: 'Total Sales', value: `KSh ${analytics?.totalRevenue?.toLocaleString() || totalRevenue.toLocaleString()}` },
             { label: 'Products', value: products.length },
-            { label: 'Orders', value: orders.length },
+            { label: 'Orders', value: analytics?.totalOrders || orders.length },
           ].map(stat => (
             <div key={stat.label} style={{ backgroundColor: 'rgba(255,255,255,0.15)',
               padding: '12px 18px', borderRadius: '8px', textAlign: 'center',
@@ -329,6 +409,47 @@ const AdminDashboard = () => {
               </span>
             </div>
           )}
+
+          <div style={{ backgroundColor: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#1e293b' }}>📣 Promotion Broadcast</div>
+                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
+                  Send a promotions message to users with promotions enabled, optionally filtered by product wishlist.
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button onClick={() => { setPromotionSubject(''); setPromotionMessage(''); setPromotionProductId(''); setPromotionResult(''); }}
+                  style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: 'white', color: '#334155', cursor: 'pointer', fontWeight: 'bold' }}>
+                  Reset
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={lbl}>Subject</label>
+                <input value={promotionSubject} onChange={e => setPromotionSubject(e.target.value)} style={inp} placeholder="Sales subject, e.g. 20% off today" />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={lbl}>Message</label>
+              <textarea value={promotionMessage} onChange={e => setPromotionMessage(e.target.value)} style={{ ...inp, minHeight: '120px', resize: 'vertical' }} placeholder="Type the promotion message here..." />
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <button onClick={handleSendPromotion} disabled={sendingPromotion}
+                style={{ padding: '12px 24px', borderRadius: '8px', border: 'none', backgroundColor: '#15803d', color: 'white', cursor: sendingPromotion ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}>
+                {sendingPromotion ? 'Sending…' : 'Send Promotion'}
+              </button>
+              {promotionResult && (
+                <span style={{ color: promotionResult.startsWith('Error') ? '#dc2626' : '#15803d', fontSize: '13px' }}>
+                  {promotionResult}
+                </span>
+              )}
+            </div>
+          </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between',
             alignItems: 'center', marginBottom: '20px' }}>

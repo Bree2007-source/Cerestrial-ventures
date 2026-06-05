@@ -1,23 +1,13 @@
-import React from 'react';
-import { Navigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext.jsx';
+import { Navigate, Outlet } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
-const ProtectedRoute = ({ children, allowedRole }) => {
+const ProtectedRoute = ({ adminOnly = false }) => {
   const { user } = useAuth();
 
-  // 1. If the person isn't logged in at all, redirect them straight to the login screen
-  if (!user) {
-    return <Navigate to="/login" replace />;
-  }
+  if (!user) return <Navigate to="/login" replace />;
+  if (adminOnly && !user.isAdmin) return <Navigate to="/" replace />;
 
-  // 2. If a specific authorization level is demanded (like admin) and they don't match, block access
-  if (allowedRole && user.role !== allowedRole) {
-    alert('Access Denied: Administrative authorization privileges required.');
-    return <Navigate to="/" replace />;
-  }
-
-  // 3. Otherwise, everything is safe, let them pass through to the protected screen!
-  return children;
+  return <Outlet />;
 };
 
 export default ProtectedRoute;

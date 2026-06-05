@@ -56,75 +56,80 @@ function CartPage() {
           {/* Cart Items */}
           <div className="lg:col-span-2 space-y-4">
             <AnimatePresence>
-              {cartItems.map((item) => (
-                <motion.div
-                  key={item._id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -100 }}
-                  transition={{ duration: 0.3 }}
-                  className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex gap-4"
-                >
-                  {/* Product Image */}
-                  <img
-                    src={item.image}
-                    alt={item.name}
-                    className="w-24 h-24 object-cover rounded-xl flex-shrink-0"
-                  />
+              {cartItems.map((item) => {
+                const quantity = Number(item.quantity || item.qty || 1);
+                const price = Number(item.retailPrice || item.price || 0);
 
-                  {/* Product Info */}
-                  <div className="flex-1">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">
-                          {item.category}
-                        </span>
-                        <h3 className="font-bold text-gray-800 mt-1">{item.name}</h3>
-                        <p className="text-green-600 font-bold text-lg">
-                          KSh {item.retailPrice}
-                        </p>
-                        <p className="text-gray-400 text-xs">
-                          Wholesale: KSh {item.wholesalePrice}
-                        </p>
-                      </div>
+                return (
+                  <motion.div
+                    key={item._id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -100 }}
+                    transition={{ duration: 0.3 }}
+                    className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex gap-4"
+                  >
+                    {/* Product Image */}
+                    <img
+                      src={item.image}
+                      alt={item.name}
+                      className="w-24 h-24 object-cover rounded-xl flex-shrink-0"
+                    />
 
-                      {/* Remove Button */}
-                      <button
-                        onClick={() => removeFromCart(item._id)}
-                        className="text-red-400 hover:text-red-600 text-xl transition-colors"
-                      >
-                        ✕
-                      </button>
-                    </div>
+                    {/* Product Info */}
+                    <div className="flex-1">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                            {item.category}
+                          </span>
+                          <h3 className="font-bold text-gray-800 mt-1">{item.name}</h3>
+                          <p className="text-green-600 font-bold text-lg">
+                            KSh {price.toLocaleString()}
+                          </p>
+                          <p className="text-gray-400 text-xs">
+                            Wholesale: KSh {item.wholesalePrice}
+                          </p>
+                        </div>
 
-                    {/* Quantity Controls */}
-                    <div className="flex items-center justify-between mt-3">
-                      <div className="flex items-center gap-3 bg-gray-100 rounded-xl px-3 py-1">
+                        {/* Remove Button */}
                         <button
-                          onClick={() => updateQty(item._id, item.qty - 1)}
-                          className="text-gray-600 hover:text-red-500 font-bold text-lg w-6 text-center transition-colors"
+                          onClick={() => removeFromCart(item._id)}
+                          className="text-red-400 hover:text-red-600 text-xl transition-colors"
                         >
-                          −
-                        </button>
-                        <span className="font-bold text-gray-800 w-6 text-center">
-                          {item.qty}
-                        </span>
-                        <button
-                          onClick={() => updateQty(item._id, item.qty + 1)}
-                          className="text-gray-600 hover:text-green-500 font-bold text-lg w-6 text-center transition-colors"
-                        >
-                          +
+                          ✕
                         </button>
                       </div>
 
-                      {/* Item Total */}
-                      <p className="font-black text-gray-800 text-lg">
-                        KSh {(item.retailPrice * item.qty).toLocaleString()}
-                      </p>
+                      {/* Quantity Controls */}
+                      <div className="flex items-center justify-between mt-3">
+                        <div className="flex items-center gap-3 bg-gray-100 rounded-xl px-3 py-1">
+                          <button
+                            onClick={() => updateQty(item._id, quantity - 1)}
+                            className="text-gray-600 hover:text-red-500 font-bold text-lg w-6 text-center transition-colors"
+                          >
+                            −
+                          </button>
+                          <span className="font-bold text-gray-800 w-6 text-center">
+                            {quantity}
+                          </span>
+                          <button
+                            onClick={() => updateQty(item._id, quantity + 1)}
+                            className="text-gray-600 hover:text-green-500 font-bold text-lg w-6 text-center transition-colors"
+                          >
+                            +
+                          </button>
+                        </div>
+
+                        {/* Item Total */}
+                        <p className="font-black text-gray-800 text-lg">
+                          KSh {(price * quantity).toLocaleString()}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                </motion.div>
-              ))}
+                  </motion.div>
+                );
+              })}
             </AnimatePresence>
 
             {/* Continue Shopping */}
@@ -149,16 +154,21 @@ function CartPage() {
 
               {/* Items breakdown */}
               <div className="space-y-3 mb-6">
-                {cartItems.map((item) => (
-                  <div key={item._id} className="flex justify-between text-sm">
-                    <span className="text-gray-600">
-                      {item.name} × {item.qty}
-                    </span>
-                    <span className="font-medium text-gray-800">
-                      KSh {(item.retailPrice * item.qty).toLocaleString()}
-                    </span>
-                  </div>
-                ))}
+                {cartItems.map((item) => {
+                  const quantity = Number(item.quantity || item.qty || 1);
+                  const price = Number(item.retailPrice || item.price || 0);
+
+                  return (
+                    <div key={item._id} className="flex justify-between text-sm">
+                      <span className="text-gray-600">
+                        {item.name} × {quantity}
+                      </span>
+                      <span className="font-medium text-gray-800">
+                        KSh {(price * quantity).toLocaleString()}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="border-t border-gray-100 pt-4 space-y-3">
@@ -179,7 +189,7 @@ function CartPage() {
               </div>
 
               {/* Wholesale notice */}
-              {cartItems.some(item => item.qty >= 10) && (
+              {cartItems.some(item => Number(item.quantity || item.qty || 1) >= 10) && (
                 <div className="mt-4 bg-yellow-50 border border-yellow-200 rounded-xl p-3">
                   <p className="text-yellow-700 text-xs font-bold">
                     🎉 You qualify for wholesale pricing on some items!
@@ -203,9 +213,13 @@ function CartPage() {
                 whileTap={{ scale: 0.98 }}
                 onClick={() => {
                   const msg = cartItems
-                    .map(i => `${i.name} x${i.qty} = KSh ${i.retailPrice * i.qty}`)
-                    .join('%0A')
-                  window.open(`https://wa.me/254700000000?text=Hello! I'd like to order:%0A${msg}%0A%0ATotal: KSh ${cartTotal}`)
+                    .map(i => {
+                      const quantity = Number(i.quantity || i.qty || 1);
+                      const price = Number(i.retailPrice || i.price || 0);
+                      return `${i.name} x${quantity} = KSh ${price * quantity}`;
+                    })
+                    .join('%0A');
+                  window.open(`https://wa.me/254700000000?text=Hello! I'd like to order:%0A${msg}%0A%0ATotal: KSh ${cartTotal}`);
                 }}
                 className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-2xl mt-3 transition-colors flex items-center justify-center gap-2"
               >

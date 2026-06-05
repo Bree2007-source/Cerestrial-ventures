@@ -16,7 +16,11 @@ export const CartProvider = ({ children }) => {
     setCartItems(prev => {
       const existing = prev.find(item => item._id === product._id);
       if (existing) {
-        return prev.map(item => item._id === product._id ? { ...item, quantity: item.quantity + 1 } : item);
+        return prev.map(item =>
+          item._id === product._id
+            ? { ...item, quantity: (item.quantity || item.qty || 0) + 1 }
+            : item
+        );
       }
       return [...prev, { ...product, quantity: 1 }];
     });
@@ -26,22 +30,48 @@ export const CartProvider = ({ children }) => {
     setCartItems(prev => prev.filter(item => item._id !== id));
   };
 
-  const updateQuantity = (id, amount) => {
-    setCartItems(prev => prev.map(item => {
-      if (item._id === id) {
-        const nextQty = item.quantity + amount;
-        return nextQty > 0 ? { ...item, quantity: nextQty } : item;
+  const updateQty = (id, nextQty) => {
+    setCartItems(prev => prev.reduce((items, item) => {
+      if (item._id !== id) {
+        items.push(item);
+        return items;
       }
-      return item;
-    }));
+
+      const quantity = Number(nextQty) || 0;
+      if (quantity > 0) {
+        items.push({ ...item, quantity });
+      }
+      return items;
+    }, []));
+  };
+
+  const updateQuantity = (id, amount) => {
+    setCartItems(prev => prev.reduce((items, item) => {
+      if (item._id !== id) {
+        items.push(item);
+        return items;
+      }
+
+      const nextQty = (item.quantity || item.qty || 0) + amount;
+      if (nextQty > 0) {
+        items.push({ ...item, quantity: nextQty });
+      }
+      return items;
+    }, []));
   };
 
   const clearCart = () => setCartItems([]);
 
-  const getSubtotal = () => cartItems.reduce((sum, item) => sum + (item.retailPrice * item.quantity), 0);
+  const getSubtotal = () => cartItems.reduce((sum, item) => {
+    const quantity = Number(item.quantity || item.qty || 1);
+    const price = Number(item.retailPrice || item.price || 0);
+    return sum + price * quantity;
+  }, 0);
+
+  const cartTotal = getSubtotal();
 
   return (
-    <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, updateQuantity, clearCart, getSubtotal }}>
+    <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, updateQty, updateQuantity, clearCart, getSubtotal, cartTotal }}>
       {children}
     </CartContext.Provider>
   );

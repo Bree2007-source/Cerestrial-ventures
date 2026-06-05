@@ -20,9 +20,16 @@ const Checkout = () => {
     return cleaned;
   };
 
-  const totalAmount = cartItems.reduce((sum, item) =>
-    sum + (item.retailPrice || item.price) * (item.qty || item.quantity || 1), 0
-  );
+  const getItemQuantity = (item) => Number(item.quantity || item.qty || 1);
+  const getItemPrice = (item) => Number(item.retailPrice || item.price || 0);
+
+  const itemsToOrder = cartItems.map(item => ({
+    name: item.name,
+    quantity: getItemQuantity(item),
+    price: getItemPrice(item)
+  }));
+
+  const totalAmount = itemsToOrder.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -42,34 +49,38 @@ const Checkout = () => {
 
     const formattedPhone = formatPhone(phone);
 
-    // If Cash on Delivery — skip M-Pesa, just save order
+    const orderPayload = {
+      customerName,
+      phone: formattedPhone,
+      location,
+      deliveryTime,
+      totalAmount,
+      paymentMethod,
+      items: itemsToOrder,
+      status: 'Order Received', // ✅ Fixed
+    };
+
+    const saveOrder = async (extra = {}) => {
+      const response = await fetch('http://localhost:5000/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...orderPayload, ...extra }),
+      });
+      const data = await response.json();
+      return { response, data };
+    };
+
+    const orderUrl = (orderId) => `/track-order?id=${orderId}`;
+
     if (paymentMethod === 'Cash') {
       try {
-        const orderRes = await fetch('http://localhost:5000/api/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerName,
-            phone: formattedPhone,
-            location,
-            totalAmount,
-            deliveryTime,
-            paymentMethod: 'Cash',
-            items: cartItems.map(item => ({
-              name: item.name,
-              quantity: item.qty || item.quantity || 1,
-              price: item.retailPrice || item.price
-            })),
-            status: 'Pending'
-          })
-        });
-        const orderData = await orderRes.json();
-        if (orderRes.ok) {
+        const { response, data } = await saveOrder({ paymentMethod: 'Cash' });
+        if (response.ok) {
           clearCart();
           alert('✅ Order placed! Pay cash on delivery.');
-          navigate(`/track-order/${orderData._id}`);
+          navigate(orderUrl(data._id));
         } else {
-          alert('❌ Failed to save order. Please try again.');
+          alert(data.message || '❌ Failed to save order. Please try again.');
         }
       } catch (err) {
         alert('❌ Cannot connect to server. Make sure backend is running.');
@@ -79,12 +90,11 @@ const Checkout = () => {
       return;
     }
 
-    // M-Pesa flow
     try {
       const paymentRes = await fetch('http://localhost:5000/api/payments/stk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: formattedPhone, amount: totalAmount })
+        body: JSON.stringify({ phone: formattedPhone, amount: totalAmount }),
       });
 
       const paymentData = await paymentRes.json();
@@ -92,89 +102,33 @@ const Checkout = () => {
       if (paymentRes.ok && paymentData.ResponseCode === '0') {
         alert('✅ STK Push sent! Check your phone and enter your M-Pesa PIN.');
 
-        const orderRes = await fetch('http://localhost:5000/api/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerName,
-            phone: formattedPhone,
-            location,
-            totalAmount,
-            deliveryTime,
-            paymentMethod: 'M-Pesa',
-            items: cartItems.map(item => ({
-              name: item.name,
-              quantity: item.qty || item.quantity || 1,
-              price: item.retailPrice || item.price
-            })),
-            mpesaCode: paymentData.CheckoutRequestID || '',
-            status: 'Pending'
-          })
-        });
-
-        const orderData = await orderRes.json();
-        if (orderRes.ok) {
+        const { response, data } = await saveOrder({ mpesaCode: paymentData.CheckoutRequestID || '' });
+        if (response.ok) {
           clearCart();
           alert('🎉 Order placed! Redirecting to tracking...');
-          navigate(`/track-order/${orderData._id}`);
+          navigate(orderUrl(data._id));
         } else {
-          alert(`⚠️ Payment sent but order save failed: ${orderData.message}`);
+          alert(data.message || '⚠️ Payment sent but order save failed.');
         }
-
       } else {
-        const orderRes = await fetch('http://localhost:5000/api/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerName,
-            phone: formattedPhone,
-            location,
-            totalAmount,
-            deliveryTime,
-            paymentMethod: 'M-Pesa',
-            items: cartItems.map(item => ({
-              name: item.name,
-              quantity: item.qty || item.quantity || 1,
-              price: item.retailPrice || item.price
-            })),
-            status: 'Pending'
-          })
-        });
-        const orderData = await orderRes.json();
-        if (orderRes.ok) {
+        const { response, data } = await saveOrder();
+        if (response.ok) {
           clearCart();
-          alert(`⚠️ M-Pesa prompt failed but order saved. You can pay later.`);
-          navigate(`/track-order/${orderData._id}`);
+          alert('⚠️ M-Pesa prompt failed but order was saved. You can pay later.');
+          navigate(orderUrl(data._id));
         } else {
-          alert('❌ Both payment and order save failed. Please try again.');
+          alert(data.message || '❌ Both payment and order save failed. Please try again.');
         }
       }
-
     } catch (err) {
       try {
-        const orderRes = await fetch('http://localhost:5000/api/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerName,
-            phone: formatPhone(phone),
-            location,
-            totalAmount,
-            deliveryTime,
-            paymentMethod: 'M-Pesa',
-            items: cartItems.map(item => ({
-              name: item.name,
-              quantity: item.qty || item.quantity || 1,
-              price: item.retailPrice || item.price
-            })),
-            status: 'Pending'
-          })
-        });
-        const orderData = await orderRes.json();
-        if (orderRes.ok) {
+        const { response, data } = await saveOrder();
+        if (response.ok) {
           clearCart();
-          alert('⚠️ M-Pesa server unreachable but order saved. Contact us to confirm payment.');
-          navigate(`/track-order/${orderData._id}`);
+          alert('⚠️ Unable to reach M-Pesa server, but order was saved. Confirm payment with us.');
+          navigate(orderUrl(data._id));
+        } else {
+          alert(data.message || '❌ Unable to save order. Please try again later.');
         }
       } catch (orderErr) {
         alert('❌ Cannot connect to server. Make sure backend is running on port 5000.');
@@ -207,11 +161,10 @@ const Checkout = () => {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '30px', marginTop: '20px' }}>
 
-        {/* ── LEFT: Form ── */}
+        {/* LEFT: Form */}
         <form onSubmit={handleSubmit} style={{ backgroundColor: '#f8fafc', padding: '25px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
           <h3 style={{ marginTop: 0, color: '#1e293b' }}>Delivery Details</h3>
 
-          {/* Name */}
           <div style={{ marginBottom: '15px' }}>
             <label style={labelStyle}>Your Full Name *</label>
             <input
@@ -224,7 +177,6 @@ const Checkout = () => {
             />
           </div>
 
-          {/* Phone */}
           <div style={{ marginBottom: '15px' }}>
             <label style={labelStyle}>Phone Number *</label>
             <input
@@ -240,7 +192,6 @@ const Checkout = () => {
             </small>
           </div>
 
-          {/* Location */}
           <div style={{ marginBottom: '20px' }}>
             <label style={labelStyle}>Delivery Location *</label>
             <textarea
@@ -253,7 +204,7 @@ const Checkout = () => {
             />
           </div>
 
-          {/* ── DELIVERY TIME PICKER ── */}
+          {/* Delivery Time */}
           <div style={{ marginBottom: '20px' }}>
             <label style={labelStyle}>Delivery Time</label>
             <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
@@ -263,16 +214,11 @@ const Checkout = () => {
                   type="button"
                   onClick={() => setDeliveryTime(option)}
                   style={{
-                    flex: 1,
-                    padding: '12px',
-                    borderRadius: '10px',
+                    flex: 1, padding: '12px', borderRadius: '10px',
                     border: `2px solid ${deliveryTime === option ? '#15803d' : '#e2e8f0'}`,
                     backgroundColor: deliveryTime === option ? '#dcfce7' : 'white',
                     color: deliveryTime === option ? '#15803d' : '#64748b',
-                    fontWeight: 'bold',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                    transition: 'all 0.2s',
+                    fontWeight: 'bold', cursor: 'pointer', fontSize: '14px', transition: 'all 0.2s',
                   }}
                 >
                   {option === 'Today' ? '⚡ Today' : '📅 Tomorrow'}
@@ -281,49 +227,37 @@ const Checkout = () => {
             </div>
           </div>
 
-          {/* ── PAYMENT METHOD PICKER ── */}
+          {/* Payment Method */}
           <div style={{ marginBottom: '24px' }}>
             <label style={labelStyle}>Payment Method</label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '8px' }}>
               {[
                 { id: 'M-Pesa', label: '📱 M-Pesa', desc: 'Pay via M-Pesa STK Push' },
-                { id: 'Cash',   label: '💵 Cash on Delivery', desc: 'Pay when goods arrive' },
+                { id: 'Cash', label: '💵 Cash on Delivery', desc: 'Pay when goods arrive' },
               ].map((method) => (
                 <div
                   key={method.id}
                   onClick={() => setPaymentMethod(method.id)}
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    padding: '14px',
+                    display: 'flex', alignItems: 'center', gap: '12px', padding: '14px',
                     borderRadius: '10px',
                     border: `2px solid ${paymentMethod === method.id ? '#15803d' : '#e2e8f0'}`,
                     backgroundColor: paymentMethod === method.id ? '#dcfce7' : 'white',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
+                    cursor: 'pointer', transition: 'all 0.2s',
                   }}
                 >
-                  {/* Radio circle */}
                   <div style={{
-                    width: '20px',
-                    height: '20px',
-                    borderRadius: '50%',
+                    width: '20px', height: '20px', borderRadius: '50%',
                     border: `2px solid ${paymentMethod === method.id ? '#15803d' : '#cbd5e1'}`,
                     backgroundColor: paymentMethod === method.id ? '#15803d' : 'white',
-                    flexShrink: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
                     {paymentMethod === method.id && (
                       <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'white' }} />
                     )}
                   </div>
                   <div>
-                    <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#1e293b' }}>
-                      {method.label}
-                    </div>
+                    <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#1e293b' }}>{method.label}</div>
                     <div style={{ fontSize: '12px', color: '#64748b' }}>{method.desc}</div>
                   </div>
                 </div>
@@ -331,21 +265,15 @@ const Checkout = () => {
             </div>
           </div>
 
-          {/* Submit Button */}
           <button
             type="submit"
             disabled={loading}
             style={{
               backgroundColor: loading ? '#86efac' : '#15803d',
-              color: 'white',
-              border: 'none',
-              padding: '14px',
-              borderRadius: '8px',
-              fontWeight: 'bold',
-              fontSize: '16px',
+              color: 'white', border: 'none', padding: '14px', borderRadius: '8px',
+              fontWeight: 'bold', fontSize: '16px',
               cursor: loading ? 'not-allowed' : 'pointer',
-              width: '100%',
-              transition: 'background 0.2s',
+              width: '100%', transition: 'background 0.2s',
             }}
           >
             {loading
@@ -362,11 +290,10 @@ const Checkout = () => {
           </p>
         </form>
 
-        {/* ── RIGHT: Order Summary ── */}
+        {/* RIGHT: Order Summary */}
         <div style={{ backgroundColor: 'white', padding: '25px', borderRadius: '12px', border: '1px solid #e2e8f0', height: 'fit-content' }}>
           <h3 style={{ marginTop: 0, color: '#1e293b' }}>📋 Order Summary</h3>
 
-          {/* Delivery badge */}
           <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
             <span style={{ backgroundColor: '#dcfce7', color: '#15803d', fontSize: '12px', fontWeight: 'bold', padding: '4px 12px', borderRadius: '20px' }}>
               {deliveryTime === 'Today' ? '⚡ Delivery Today' : '📅 Delivery Tomorrow'}
@@ -376,7 +303,6 @@ const Checkout = () => {
             </span>
           </div>
 
-          {/* Items list */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', margin: '15px 0', maxHeight: '350px', overflowY: 'auto' }}>
             {cartItems.map((item, index) => (
               <div key={item._id || index} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
@@ -393,7 +319,6 @@ const Checkout = () => {
             ))}
           </div>
 
-          {/* Total */}
           <div style={{ borderTop: '2px solid #15803d', paddingTop: '15px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontWeight: 'bold', fontSize: '16px' }}>Grand Total:</span>
@@ -409,22 +334,14 @@ const Checkout = () => {
   );
 };
 
-// Reusable styles
 const labelStyle = {
-  display: 'block',
-  fontSize: '13px',
-  fontWeight: 'bold',
-  marginBottom: '5px',
-  color: '#334155',
+  display: 'block', fontSize: '13px', fontWeight: 'bold',
+  marginBottom: '5px', color: '#334155',
 };
 
 const inputStyle = {
-  width: '100%',
-  padding: '10px',
-  borderRadius: '6px',
-  border: '1px solid #cbd5e1',
-  boxSizing: 'border-box',
-  fontSize: '14px',
+  width: '100%', padding: '10px', borderRadius: '6px',
+  border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '14px',
 };
 
 export default Checkout;

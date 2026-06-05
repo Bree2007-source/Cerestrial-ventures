@@ -1,12 +1,19 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 
 const Header = ({ selectedCategory, setSelectedCategory }) => {
   const location = useLocation();
   const { theme, setTheme } = useTheme();
+  const { user } = useAuth();
+  const [bellOpen, setBellOpen] = useState(false);
 
   const isAdminPage = location.pathname === '/admin';
+  const notificationCount = user?.notificationPreferences
+    ? Object.values(user.notificationPreferences).filter(Boolean).length
+    : 0;
+  const notificationsEnabled = notificationCount > 0;
 
   const categories = [
     'All', 'Sugar', 'Rice', 'Cooking Oil', 'Maize Flour',
@@ -27,9 +34,63 @@ const Header = ({ selectedCategory, setSelectedCategory }) => {
         </Link>
 
         {/* Right Side Nav */}
-        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }}>
 
-          {/* 🌙 Theme Toggle */}
+          <button
+            onClick={() => setBellOpen((prev) => !prev)}
+            style={{
+              background: 'rgba(255,255,255,0.15)',
+              border: '1px solid rgba(255,255,255,0.3)',
+              borderRadius: '10px',
+              padding: '8px 10px',
+              cursor: 'pointer',
+              color: 'white',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              position: 'relative',
+            }}
+          >
+            🔔
+            {notificationsEnabled && (
+              <span style={{
+                position: 'absolute', top: 4, right: 4, minWidth: 18, height: 18,
+                borderRadius: 9, background: '#facc15', color: '#1e293b',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '11px', fontWeight: '800', padding: '0 4px'
+              }}>
+                {notificationCount}
+              </span>
+            )}
+          </button>
+
+          {bellOpen && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 10px)', right: 0,
+              width: 280, backgroundColor: '#fff', color: '#0f172a',
+              borderRadius: 14, boxShadow: '0 18px 40px rgba(15, 23, 42, 0.18)',
+              padding: 18, zIndex: 20
+            }}>
+              <div style={{ fontSize: 14, fontWeight: '700', marginBottom: 10 }}>Notifications</div>
+              {user ? (
+                <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
+                  {notificationsEnabled
+                    ? `You are subscribed to ${notificationCount} notification channel${notificationCount > 1 ? 's' : ''}.`
+                    : 'Notifications are turned off. Enable them in your profile.'}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
+                  Login to manage your notification settings.
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+                <Link to={user ? '/profile' : '/login'}
+                  style={{ color: '#15803d', fontWeight: '700', textDecoration: 'none', fontSize: 13 }}>
+                  {user ? 'Open notification settings' : 'Login to continue'}
+                </Link>
+              </div>
+            </div>
+          )}
+
           <button
             onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
             style={{
@@ -52,6 +113,10 @@ const Header = ({ selectedCategory, setSelectedCategory }) => {
 
           <Link to="/cart" style={{ color: 'white', textDecoration: 'none', fontWeight: 'bold' }}>
             🛒 Cart
+          </Link>
+
+          <Link to="/wishlist" style={{ color: 'white', textDecoration: 'none', fontWeight: 'bold' }}>
+            💖 Wishlist
           </Link>
 
           <Link
