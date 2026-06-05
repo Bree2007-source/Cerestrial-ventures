@@ -20,9 +20,8 @@ const createAdmin = async () => {
         await User.create({
             name: 'Admin',
             email: 'admin@cerestrial.com',
-            phone: '0700000000',
             password: hash,
-            role: 'admin'
+            isAdmin: true
         });
 
         console.log('✅ Admin created!');

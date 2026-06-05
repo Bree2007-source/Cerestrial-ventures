@@ -1,87 +1,79 @@
 import express from 'express'
-import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import User from '../models/User.js'
 
 const router = express.Router()
 
-// POST /api/auth/register
+// ── Middleware to verify token ──
+const protect = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1]
+  if (!token) return res.status(401).json({ message: 'No token' })
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    req.userId = decoded.id
+    next()
+  } catch {
+    res.status(401).json({ message: 'Invalid token' })
+  }
+}
+
+// ── REGISTER ──
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, phone, password, accountType } = req.body
-
-    // Check if user already exists
+    const { name, email, password, phone } = req.body
     const exists = await User.findOne({ email })
-    if (exists) {
-      return res.status(400).json({ message: 'Email already registered' })
-    }
+    if (exists) return res.status(400).json({ message: 'Email already in use' })
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10)
-
-    // Create user
-    const user = await User.create({
-      name,
-      email,
-      phone,
-      password: hashedPassword,
-      role: accountType === 'wholesale' ? 'wholesaler' : 'customer'
-    })
-
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '30d' }
-    )
+    const user = await User.create({ name, email, password, phone })
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
 
     res.status(201).json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-      token,
+      _id: user._id, name: user.name, email: user.email,
+      phone: user.phone, isAdmin: user.isAdmin, token
     })
-  } catch (error) {
-    res.status(500).json({ message: error.message })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
   }
 })
 
-// POST /api/auth/login
+// ── LOGIN ──
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body
-
-    // Find user
     const user = await User.findOne({ email })
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password' })
-    }
+    if (!user) return res.status(400).json({ message: 'Invalid credentials' })
 
-    // Check password
-    const isMatch = await bcrypt.compare(password, user.password)
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid email or password' })
-    }
+    const isMatch = await user.matchPassword(password)
+    if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' })
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '30d' }
-    )
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
 
     res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-      token,
+      _id: user._id, name: user.name, email: user.email,
+      phone: user.phone, isAdmin: user.isAdmin,
+      notificationPreferences: user.notificationPreferences, token
     })
-  } catch (error) {
-    res.status(500).json({ message: error.message })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+// ── UPDATE profile ──
+router.put('/update', protect, async (req, res) => {
+  try {
+    const { name, email, phone } = req.body
+    const user = await User.findByIdAndUpdate(
+      req.userId,
+      { name, email, phone },
+      { new: true }
+    ).select('-password')
+
+    res.json({
+      _id: user._id, name: user.name, email: user.email,
+      phone: user.phone, isAdmin: user.isAdmin
+    })
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' })
   }
 })
 
