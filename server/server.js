@@ -32,8 +32,8 @@ const httpServer = http.createServer(app)
 // ✅ Attach Socket.io to the HTTP server
 const io = new Server(httpServer, {
   cors: {
-    origin: 'http://localhost:5173',
-    methods: ['GET', 'POST', 'PUT', 'PATCH'],
+    origin: [/^http:\/\/localhost(:\d+)?$/],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     credentials: true
   }
 })
@@ -58,7 +58,7 @@ io.on('connection', (socket) => {
 
 // Middleware
 app.use(cors({ 
-  origin: 'http://localhost:5173', 
+  origin: [/^http:\/\/localhost(:\d+)?$/], 
   credentials: true 
 }))
 app.use(express.json())
