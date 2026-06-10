@@ -19,10 +19,12 @@ import Wishlist from "./pages/Wishlist";
 import { AuthProvider } from "./context/AuthContext";
 import { CartProvider } from "./context/CartContext";
 import { ThemeProvider } from "./context/ThemeContext";
+import { NotificationProvider } from "./context/NotificationContext";
 
 import ProtectedRoute from "./components/ProtectedRoute";
 import BottomNav from "./components/BottomNav";
 import Header from "./components/Header";
+import InstallPrompt from "./components/InstallPrompt";
 
 function AppRoutes() {
   const location = useLocation();
@@ -32,8 +34,12 @@ function AppRoutes() {
   return (
     <div style={{ minHeight: '100vh', paddingBottom: '92px' }}>
       {!hiddenPaths.includes(location.pathname) && (
-        <Header selectedCategory={selectedCategory} setSelectedCategory={setSelectedCategory} />
+        <Header
+          selectedCategory={selectedCategory}
+          setSelectedCategory={setSelectedCategory}
+        />
       )}
+
       <Routes>
         {/* Public routes */}
         <Route path="/" element={<Home selectedCategory={selectedCategory} />} />
@@ -44,7 +50,7 @@ function AppRoutes() {
         <Route path="/product/:id" element={<ProductPage />} />
         <Route path="/track-order" element={<TrackOrder />} />
 
-        {/* Protected routes (user must be logged in) */}
+        {/* Protected routes */}
         <Route element={<ProtectedRoute />}>
           <Route path="/cart" element={<CartPage />} />
           <Route path="/checkout" element={<Checkout />} />
@@ -53,13 +59,16 @@ function AppRoutes() {
           <Route path="/wishlist" element={<Wishlist />} />
         </Route>
 
-        {/* Admin route */}
+        {/* Admin only */}
         <Route element={<ProtectedRoute adminOnly />}>
           <Route path="/admin" element={<AdminDashboard />} />
         </Route>
       </Routes>
 
       {!hiddenPaths.includes(location.pathname) && <BottomNav />}
+
+      {/* PWA Install Prompt — shows on all pages */}
+      <InstallPrompt />
     </div>
   );
 }
@@ -68,14 +77,16 @@ function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <CartProvider>
-          <BrowserRouter>
-            <AppRoutes />
-          </BrowserRouter>
-        </CartProvider>
+        <NotificationProvider>
+          <CartProvider>
+            <BrowserRouter>
+              <AppRoutes />
+            </BrowserRouter>
+          </CartProvider>
+        </NotificationProvider>
       </AuthProvider>
     </ThemeProvider>
   );
 }
 
-export default App; 
+export default App;

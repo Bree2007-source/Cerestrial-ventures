@@ -1,10 +1,10 @@
 import express from 'express'
 import jwt from 'jsonwebtoken'
 import User from '../models/User.js'
+import Notification from '../models/Notification.js'
 
 const router = express.Router()
 
-// ── Middleware to verify token ──
 const protect = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
   if (!token) return res.status(401).json({ message: 'No token' })
@@ -17,7 +17,7 @@ const protect = (req, res, next) => {
   }
 }
 
-// ── REGISTER ──
+// REGISTER
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password, phone } = req.body
@@ -26,6 +26,15 @@ router.post('/register', async (req, res) => {
 
     const user = await User.create({ name, email, password, phone })
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
+
+    // Notify admins about the new registration
+    await Notification.create({
+      isAdminNotification: true,
+      title: 'New Customer Registered 👤',
+      message: `${name} (${email}) just created an account.`,
+      type: 'new_customer',
+      link: '/admin',
+    })
 
     res.status(201).json({
       _id: user._id, name: user.name, email: user.email,
@@ -36,7 +45,7 @@ router.post('/register', async (req, res) => {
   }
 })
 
-// ── LOGIN ──
+// LOGIN
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body
@@ -58,7 +67,7 @@ router.post('/login', async (req, res) => {
   }
 })
 
-// ── UPDATE profile ──
+// UPDATE profile
 router.put('/update', protect, async (req, res) => {
   try {
     const { name, email, phone } = req.body

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useCart } from '../context/CartContext';
 import { useNavigate } from 'react-router-dom';
+import API_BASE_URL from '../config';
 
 const Checkout = () => {
   const { cartItems, clearCart } = useCart();
@@ -12,6 +13,126 @@ const Checkout = () => {
   const [loading, setLoading] = useState(false);
   const [deliveryTime, setDeliveryTime] = useState('Today');
   const [paymentMethod, setPaymentMethod] = useState('M-Pesa');
+
+  const [mapVisible, setMapVisible] = useState(false);
+  const [pinnedLatLng, setPinnedLatLng] = useState(null);
+  const [locationConfirmed, setLocationConfirmed] = useState(false);
+  const mapInitialized = useRef(false);
+  const markerRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const pinnedLatLngRef = useRef(null);
+
+  useEffect(() => {
+    pinnedLatLngRef.current = pinnedLatLng;
+  }, [pinnedLatLng]);
+
+  useEffect(() => {
+    if (!mapVisible) return;
+
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+
+    const initMap = () => {
+      if (mapInitialized.current) return;
+      const L = window.L;
+      if (!L) return;
+
+      mapInitialized.current = true;
+      const map = L.map('checkout-map').setView([-0.3031, 36.0800], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+      mapInstanceRef.current = map;
+
+      map.on('click', (e) => {
+        const { lat, lng } = e.latlng;
+        if (markerRef.current) {
+          markerRef.current.setLatLng([lat, lng]);
+        } else {
+          const marker = L.marker([lat, lng], { draggable: true }).addTo(map);
+          marker.on('dragend', (ev) => {
+            const pos = ev.target.getLatLng();
+            setPinnedLatLng({ lat: pos.lat, lng: pos.lng });
+          });
+          markerRef.current = marker;
+        }
+        setPinnedLatLng({ lat, lng });
+      });
+    };
+
+    if (!window.L) {
+      if (!document.getElementById('leaflet-js')) {
+        const script = document.createElement('script');
+        script.id = 'leaflet-js';
+        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+        script.onload = () => setTimeout(initMap, 100);
+        document.head.appendChild(script);
+      }
+    } else {
+      setTimeout(initMap, 100);
+    }
+  }, [mapVisible]);
+
+  const reverseGeocode = async (lat, lng) => {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`
+      );
+      const data = await res.json();
+      return data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    } catch {
+      return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+  };
+
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const address = await reverseGeocode(lat, lng);
+        setPinnedLatLng({ lat, lng });
+        setLocation(address);
+        setLocationConfirmed(true);
+        setMapVisible(false);
+      },
+      () => alert('Unable to get your location. Please pin it on the map instead.')
+    );
+  };
+
+  const handleConfirmPin = async () => {
+    const current = pinnedLatLngRef.current;
+    if (!current) {
+      alert('Please tap on the map to drop a pin first.');
+      return;
+    }
+    const address = await reverseGeocode(current.lat, current.lng);
+    setLocation(address);
+    setLocationConfirmed(true);
+    setMapVisible(false);
+  };
+
+  const resetLocation = () => {
+    setLocationConfirmed(false);
+    setPinnedLatLng(null);
+    setLocation('');
+    mapInitialized.current = false;
+    markerRef.current = null;
+    pinnedLatLngRef.current = null;
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+    }
+  };
 
   const formatPhone = (raw) => {
     let cleaned = raw.replace(/\s/g, '');
@@ -35,8 +156,14 @@ const Checkout = () => {
     e.preventDefault();
     setLoading(true);
 
-    if (!customerName || !phone || !location) {
+    if (!customerName || !phone) {
       alert('Please fill in all fields');
+      setLoading(false);
+      return;
+    }
+
+    if (!locationConfirmed || !pinnedLatLngRef.current) {
+      alert('Please select your delivery location before placing your order.');
       setLoading(false);
       return;
     }
@@ -48,20 +175,23 @@ const Checkout = () => {
     }
 
     const formattedPhone = formatPhone(phone);
+    const coords = pinnedLatLngRef.current;
 
     const orderPayload = {
       customerName,
       phone: formattedPhone,
       location,
+      latitude: coords.lat,
+      longitude: coords.lng,
       deliveryTime,
       totalAmount,
       paymentMethod,
       items: itemsToOrder,
-      status: 'Order Received', // ✅ Fixed
+      status: 'Order Received',
     };
 
     const saveOrder = async (extra = {}) => {
-      const response = await fetch('http://localhost:5000/api/orders', {
+      const response = await fetch(`${API_BASE_URL}/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...orderPayload, ...extra }),
@@ -91,17 +221,15 @@ const Checkout = () => {
     }
 
     try {
-      const paymentRes = await fetch('http://localhost:5000/api/payments/stk', {
+      const paymentRes = await fetch(`${API_BASE_URL}/payments/stk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: formattedPhone, amount: totalAmount }),
       });
-
       const paymentData = await paymentRes.json();
 
       if (paymentRes.ok && paymentData.ResponseCode === '0') {
         alert('✅ STK Push sent! Check your phone and enter your M-Pesa PIN.');
-
         const { response, data } = await saveOrder({ mpesaCode: paymentData.CheckoutRequestID || '' });
         if (response.ok) {
           clearCart();
@@ -130,7 +258,7 @@ const Checkout = () => {
         } else {
           alert(data.message || '❌ Unable to save order. Please try again later.');
         }
-      } catch (orderErr) {
+      } catch {
         alert('❌ Cannot connect to server. Make sure backend is running on port 5000.');
       }
     } finally {
@@ -168,40 +296,125 @@ const Checkout = () => {
           <div style={{ marginBottom: '15px' }}>
             <label style={labelStyle}>Your Full Name *</label>
             <input
-              type="text"
-              value={customerName}
+              type="text" value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
-              required
-              placeholder="e.g., Brenda Kathure"
-              style={inputStyle}
+              required placeholder="e.g., Brenda Kathure" style={inputStyle}
             />
           </div>
 
           <div style={{ marginBottom: '15px' }}>
             <label style={labelStyle}>Phone Number *</label>
             <input
-              type="tel"
-              value={phone}
+              type="tel" value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              required
-              placeholder="e.g., 0712345678"
-              style={inputStyle}
+              required placeholder="e.g., 0712345678" style={inputStyle}
             />
             <small style={{ color: '#64748b', fontSize: '11px' }}>
               Used for M-Pesa payment and delivery updates
             </small>
           </div>
 
+          {/* Delivery Location */}
           <div style={{ marginBottom: '20px' }}>
             <label style={labelStyle}>Delivery Location *</label>
-            <textarea
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              required
-              placeholder="e.g., Nakuru Town, Section 5, Near Blankets Mill"
-              rows="3"
-              style={{ ...inputStyle, fontFamily: 'sans-serif', resize: 'vertical' }}
-            />
+
+            {!locationConfirmed ? (
+              <>
+                <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                  <button
+                    type="button" onClick={handleUseCurrentLocation}
+                    style={{
+                      flex: 1, padding: '10px', borderRadius: '8px',
+                      border: '2px solid #15803d', backgroundColor: '#dcfce7',
+                      color: '#15803d', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px'
+                    }}
+                  >
+                    📍 Use Current Location
+                  </button>
+                  <button
+                    type="button" onClick={() => setMapVisible(true)}
+                    style={{
+                      flex: 1, padding: '10px', borderRadius: '8px',
+                      border: '2px solid #1d4ed8', backgroundColor: '#dbeafe',
+                      color: '#1d4ed8', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px'
+                    }}
+                  >
+                    🗺️ Pin on Map
+                  </button>
+                </div>
+                <p style={{ color: '#ef4444', fontSize: '12px', marginTop: '6px' }}>
+                  Please select your delivery location before placing your order.
+                </p>
+              </>
+            ) : (
+              <div style={{
+                marginTop: '8px', padding: '10px 14px', borderRadius: '8px',
+                border: '2px solid #15803d', backgroundColor: '#dcfce7',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px'
+              }}>
+                <span style={{ fontSize: '13px', color: '#166534', flex: 1 }}>
+                  📍 {location}
+                </span>
+                <button
+                  type="button" onClick={resetLocation}
+                  style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', flexShrink: 0 }}
+                >
+                  ✕ Change
+                </button>
+              </div>
+            )}
+
+            {/* Map Modal */}
+            {mapVisible && (
+              <div style={{
+                position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)',
+                zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center'
+              }}>
+                <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '20px', width: '90%', maxWidth: '600px' }}>
+                  <h3 style={{ marginTop: 0, color: '#1e293b' }}>📍 Pin Your Delivery Location</h3>
+                  <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '10px' }}>
+                    Tap anywhere on the map to drop a pin. You can drag it to adjust.
+                  </p>
+                  <div id="checkout-map" style={{ height: '350px', borderRadius: '8px', border: '1px solid #e2e8f0' }} />
+                  {pinnedLatLng && (
+                    <p style={{ fontSize: '12px', color: '#15803d', marginTop: '8px' }}>
+                      ✅ Pin dropped at {pinnedLatLng.lat.toFixed(5)}, {pinnedLatLng.lng.toFixed(5)}
+                    </p>
+                  )}
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
+                    <button
+                      type="button" onClick={handleConfirmPin}
+                      style={{
+                        flex: 1, padding: '12px', backgroundColor: '#15803d', color: 'white',
+                        border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer'
+                      }}
+                    >
+                      ✅ Confirm This Location
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMapVisible(false);
+                        setPinnedLatLng(null);
+                        mapInitialized.current = false;
+                        markerRef.current = null;
+                        pinnedLatLngRef.current = null;
+                        if (mapInstanceRef.current) {
+                          mapInstanceRef.current.remove();
+                          mapInstanceRef.current = null;
+                        }
+                      }}
+                      style={{
+                        flex: 1, padding: '12px', backgroundColor: '#f1f5f9', color: '#334155',
+                        border: '1px solid #cbd5e1', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer'
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Delivery Time */}
@@ -210,9 +423,7 @@ const Checkout = () => {
             <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
               {['Today', 'Tomorrow'].map((option) => (
                 <button
-                  key={option}
-                  type="button"
-                  onClick={() => setDeliveryTime(option)}
+                  key={option} type="button" onClick={() => setDeliveryTime(option)}
                   style={{
                     flex: 1, padding: '12px', borderRadius: '10px',
                     border: `2px solid ${deliveryTime === option ? '#15803d' : '#e2e8f0'}`,
@@ -236,8 +447,7 @@ const Checkout = () => {
                 { id: 'Cash', label: '💵 Cash on Delivery', desc: 'Pay when goods arrive' },
               ].map((method) => (
                 <div
-                  key={method.id}
-                  onClick={() => setPaymentMethod(method.id)}
+                  key={method.id} onClick={() => setPaymentMethod(method.id)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '12px', padding: '14px',
                     borderRadius: '10px',
@@ -266,8 +476,7 @@ const Checkout = () => {
           </div>
 
           <button
-            type="submit"
-            disabled={loading}
+            type="submit" disabled={loading}
             style={{
               backgroundColor: loading ? '#86efac' : '#15803d',
               color: 'white', border: 'none', padding: '14px', borderRadius: '8px',
@@ -293,7 +502,6 @@ const Checkout = () => {
         {/* RIGHT: Order Summary */}
         <div style={{ backgroundColor: 'white', padding: '25px', borderRadius: '12px', border: '1px solid #e2e8f0', height: 'fit-content' }}>
           <h3 style={{ marginTop: 0, color: '#1e293b' }}>📋 Order Summary</h3>
-
           <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
             <span style={{ backgroundColor: '#dcfce7', color: '#15803d', fontSize: '12px', fontWeight: 'bold', padding: '4px 12px', borderRadius: '20px' }}>
               {deliveryTime === 'Today' ? '⚡ Delivery Today' : '📅 Delivery Tomorrow'}
@@ -302,7 +510,6 @@ const Checkout = () => {
               {paymentMethod === 'M-Pesa' ? '📱 M-Pesa' : '💵 Cash'}
             </span>
           </div>
-
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', margin: '15px 0', maxHeight: '350px', overflowY: 'auto' }}>
             {cartItems.map((item, index) => (
               <div key={item._id || index} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
@@ -318,7 +525,6 @@ const Checkout = () => {
               </div>
             ))}
           </div>
-
           <div style={{ borderTop: '2px solid #15803d', paddingTop: '15px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontWeight: 'bold', fontSize: '16px' }}>Grand Total:</span>

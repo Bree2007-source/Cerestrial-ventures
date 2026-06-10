@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
+import API_BASE_URL, { API_HOST } from '../config';
 
-const socket = io('http://localhost:5000');
+const socket = io(API_HOST);
 
 const statusSteps = [
   'Order Received',
@@ -22,7 +23,7 @@ const OrderTracking = () => {
     const fetchOrders = async () => {
       try {
         const token = localStorage.getItem('cv-token') || localStorage.getItem('token');
-        const res = await fetch('http://localhost:5000/api/orders/my', {
+        const res = await fetch(`${API_BASE_URL}/orders/my`, {
           headers: {
             Authorization: `Bearer ${token}`
           }

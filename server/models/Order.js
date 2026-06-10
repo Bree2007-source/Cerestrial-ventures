@@ -1,15 +1,17 @@
-import mongoose from 'mongoose'
+import mongoose from 'mongoose';
 
 const orderSchema = new mongoose.Schema({
   customerName: { type: String, required: true },
   phone: { type: String, required: true },
   email: { type: String },
   location: { type: String, required: true },
+  latitude: { type: Number, default: null },
+  longitude: { type: Number, default: null },
   deliveryTime: { type: String, default: 'Today' },
-  paymentMethod: { 
-    type: String, 
-    enum: ['Cash', 'M-Pesa'], 
-    default: 'Cash' 
+  paymentMethod: {
+    type: String,
+    enum: ['Cash', 'M-Pesa'],
+    default: 'Cash'
   },
   items: [
     {
@@ -23,15 +25,8 @@ const orderSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: [
-      'Pending',
-      'Order Received',
-      'Payment Confirmed',
-      'Paid',
-      'Processing Order',
-      'Packed',
-      'Out for Delivery',
-      'Delivered',
-      'Cancelled'
+      'Pending', 'Order Received', 'Payment Confirmed', 'Paid',
+      'Processing Order', 'Packed', 'Out for Delivery', 'Delivered', 'Cancelled'
     ],
     default: 'Order Received'
   },
@@ -51,7 +46,11 @@ const orderSchema = new mongoose.Schema({
     lng: { type: Number },
   },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-}, { timestamps: true })
+}, { timestamps: true });
 
-const Order = mongoose.model('Order', orderSchema)
-export default Order
+orderSchema.index({ userId: 1 });
+orderSchema.index({ createdAt: -1 });
+orderSchema.index({ status: 1 });
+
+const Order = mongoose.model('Order', orderSchema);
+export default Order;

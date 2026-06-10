@@ -1,30 +1,60 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import API_BASE_URL from '../config';
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [wishlist, setWishlist] = useState(() => {
-    const storedWishlist = localStorage.getItem('cv-wishlist');
-    return storedWishlist ? JSON.parse(storedWishlist) : [];
-  });
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const storedUser = localStorage.getItem('cv-user');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
+  const parseStorageItem = (key, fallback) => {
+    const storedValue = localStorage.getItem(key);
+    if (!storedValue || storedValue === 'undefined' || storedValue === 'null') return fallback;
+    try {
+      return JSON.parse(storedValue);
+    } catch (error) {
+      console.warn(`Invalid JSON in localStorage for ${key}:`, error.message);
+      localStorage.removeItem(key);
+      return fallback;
     }
-    setLoading(false);
-  }, []);
+  };
+
+  const [wishlist, setWishlist] = useState(() => parseStorageItem('cv-wishlist', []));
 
   useEffect(() => {
     localStorage.setItem('cv-wishlist', JSON.stringify(wishlist));
   }, [wishlist]);
 
+  const getHeaders = () => {
+    const token = localStorage.getItem('cv-token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  const fetchWishlistFromDB = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/users/wishlist`, {
+        headers: getHeaders(),
+      });
+      const data = Array.isArray(res.data) ? res.data : [];
+      setWishlist(data);
+      localStorage.setItem('cv-wishlist', JSON.stringify(data));
+    } catch (err) {
+      console.warn('Could not sync wishlist from server:', err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    const storedUser = parseStorageItem('cv-user', null);
+    if (storedUser) {
+      setUser(storedUser);
+      fetchWishlistFromDB();
+    }
+    setLoading(false);
+  }, []);
+
   const login = async (email, password) => {
-    const res = await axios.post('http://localhost:5000/api/auth/login', { email, password });
+    const res = await axios.post(`${API_BASE_URL}/auth/login`, { email, password });
     const userData = {
       _id: res.data._id,
       name: res.data.name,
@@ -35,12 +65,15 @@ export const AuthProvider = ({ children }) => {
     };
     setUser(userData);
     localStorage.setItem('cv-user', JSON.stringify(userData));
+    localStorage.setItem('user', JSON.stringify(userData));
     localStorage.setItem('cv-token', res.data.token);
+    localStorage.setItem('token', res.data.token);
+    setTimeout(fetchWishlistFromDB, 100);
     return { user: userData, token: res.data.token };
   };
 
   const register = async (name, email, password, phone) => {
-    const res = await axios.post('http://localhost:5000/api/auth/register', { name, email, password, phone });
+    const res = await axios.post(`${API_BASE_URL}/auth/register`, { name, email, password, phone });
     const userData = {
       _id: res.data._id,
       name: res.data.name,
@@ -51,7 +84,9 @@ export const AuthProvider = ({ children }) => {
     };
     setUser(userData);
     localStorage.setItem('cv-user', JSON.stringify(userData));
+    localStorage.setItem('user', JSON.stringify(userData));
     localStorage.setItem('cv-token', res.data.token);
+    localStorage.setItem('token', res.data.token);
     return { user: userData, token: res.data.token };
   };
 
@@ -63,15 +98,38 @@ export const AuthProvider = ({ children }) => {
     });
   };
 
-  const addToWishlist = (product) => {
+  const addToWishlist = async (product) => {
     setWishlist((prev) => {
       if (prev.some((item) => item._id === product._id)) return prev;
       return [...prev, product];
     });
+    if (user) {
+      try {
+        await axios.post(
+          `${API_BASE_URL}/users/wishlist/${product._id}`,
+          {},
+          { headers: getHeaders() }
+        );
+      } catch (err) {
+        console.warn('Wishlist sync failed:', err.message);
+        setWishlist((prev) => prev.filter((item) => item._id !== product._id));
+      }
+    }
   };
 
-  const removeFromWishlist = (productId) => {
+  const removeFromWishlist = async (productId) => {
     setWishlist((prev) => prev.filter((item) => item._id !== productId));
+    if (user) {
+      try {
+        await axios.post(
+          `${API_BASE_URL}/users/wishlist/${productId}`,
+          {},
+          { headers: getHeaders() }
+        );
+      } catch (err) {
+        console.warn('Wishlist remove sync failed:', err.message);
+      }
+    }
   };
 
   const toggleWishlist = (product) => {
@@ -86,15 +144,17 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     setUser(null);
+    setWishlist([]);
     localStorage.removeItem('cv-user');
     localStorage.removeItem('cv-token');
+    localStorage.removeItem('cv-wishlist');
   };
 
   return (
     <AuthContext.Provider value={{
       user, loading, wishlist, login, register, logout,
       addToWishlist, removeFromWishlist, toggleWishlist,
-      isInWishlist, updateUser
+      isInWishlist, updateUser, fetchWishlistFromDB
     }}>
       {children}
     </AuthContext.Provider>
@@ -102,5 +162,4 @@ export const AuthProvider = ({ children }) => {
 };
 
 export const useAuth = () => useContext(AuthContext);
-
 export default AuthContext;

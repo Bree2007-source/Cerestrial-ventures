@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import API_BASE_URL from '../config';
 import { useAuth } from "../context/AuthContext";
 
 export default function Profile() {
@@ -13,14 +14,13 @@ export default function Profile() {
   const [ordersLoading, setOrdersLoading] = useState(false);
 
   const [personal, setPersonal] = useState({
-    firstName: "Janet", lastName: "Mutheu",
+    firstName: "", lastName: "",
     email: "", phone: "", accountType: "Retail",
   });
   const [personalDraft, setPersonalDraft] = useState({ ...personal });
 
   const [biz, setBiz] = useState({
-    businessName: "Kamau General Store",
-    kraPin: "A001234567P", bizType: "Sole Proprietor",
+    businessName: "", kraPin: "", bizType: "Sole Proprietor",
   });
   const [bizDraft, setBizDraft] = useState({ ...biz });
 
@@ -28,10 +28,7 @@ export default function Profile() {
     orderUpdates: true, promotions: true, restock: false,
   });
 
-  const [addresses, setAddresses] = useState([
-    { id: 'home', title: 'Home', line1: '123 Moi Avenue, Apt 4B', line2: 'Nairobi CBD, Nairobi 00100', country: 'Kenya', isDefault: true },
-    { id: 'business', title: 'Business', line1: 'Kamau General Store, Tom Mboya St', line2: 'Eastleigh, Nairobi 00600', country: 'Kenya', isDefault: false },
-  ]);
+  const [addresses, setAddresses] = useState([]);
 
   const [addressForm, setAddressForm] = useState({ id: '', title: '', line1: '', line2: '', country: 'Kenya', isDefault: false });
   const [isEditingAddress, setIsEditingAddress] = useState(false);
@@ -44,8 +41,8 @@ export default function Profile() {
     if (!user) return;
     const [firstName = '', ...rest] = (user.name || '').split(' ');
     const lastName = rest.join(' ');
-    setPersonal(prev => ({ ...prev, firstName: firstName || prev.firstName, lastName: lastName || prev.lastName, email: user.email || prev.email, phone: user.phone || prev.phone }));
-    setPersonalDraft(prev => ({ ...prev, firstName: firstName || prev.firstName, lastName: lastName || prev.lastName, email: user.email || prev.email, phone: user.phone || prev.phone }));
+    setPersonal(prev => ({ ...prev, firstName: firstName || '', lastName: lastName || '', email: user.email || '', phone: user.phone || '' }));
+    setPersonalDraft(prev => ({ ...prev, firstName: firstName || '', lastName: lastName || '', email: user.email || '', phone: user.phone || '' }));
     if (user.notificationPreferences) setNotifications(user.notificationPreferences);
   }, [user]);
 
@@ -55,7 +52,7 @@ export default function Profile() {
       setOrdersLoading(true);
       try {
         const token = localStorage.getItem('cv-token');
-        const res = await axios.get('http://localhost:5000/api/orders/my', {
+        const res = await axios.get(`${API_BASE_URL}/orders/my`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         setRealOrders(Array.isArray(res.data) ? res.data : []);
@@ -67,6 +64,8 @@ export default function Profile() {
     };
     fetchOrders();
   }, [activeTab]);
+
+  const totalSpent = realOrders.reduce((s, o) => s + (o.totalAmount || 0), 0);
 
   const statusColors = {
     'Delivered':        { background: "#0f3d1a", color: "#4aa85a" },
@@ -103,7 +102,7 @@ export default function Profile() {
     setSettingsMessage('Saving...');
     try {
       const token = localStorage.getItem('cv-token');
-      await axios.put('http://localhost:5000/api/users/notifications', nextPrefs, { headers: { Authorization: `Bearer ${token}` } });
+      await axios.put(`${API_BASE_URL}/users/notifications`, nextPrefs, { headers: { Authorization: `Bearer ${token}` } });
       setSettingsMessage(`${key.replace(/([A-Z])/g, ' $1')} ${nextValue ? 'enabled' : 'disabled'}.`);
       if (updateUser) updateUser({ notificationPreferences: nextPrefs });
     } catch {
@@ -133,7 +132,7 @@ export default function Profile() {
     );
   }
 
-  const initials = `${personal.firstName?.[0] || ''}${personal.lastName?.[0] || ''}`.toUpperCase();
+  const initials = `${personal.firstName?.[0] || ''}${personal.lastName?.[0] || ''}`.toUpperCase() || user?.name?.[0]?.toUpperCase() || '?';
 
   return (
     <div style={{ background: "#0a1f0f", minHeight: "100vh", paddingBottom: 80, fontFamily: "sans-serif", color: "#c8e6cc" }}>
@@ -146,7 +145,7 @@ export default function Profile() {
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 20, fontWeight: "bold", color: "#fff", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              {user?.name || `${personal.firstName} ${personal.lastName}`}
+              {user?.name || `${personal.firstName} ${personal.lastName}`.trim() || 'User'}
               <span style={{ background: "#e6a817", color: "#3a2500", fontSize: 10, padding: "2px 10px", borderRadius: 99, fontWeight: "bold" }}>
                 {personal.accountType}
               </span>
@@ -159,9 +158,9 @@ export default function Profile() {
         {/* Stats bar */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
           {[
-            [realOrders.length || '4', "Orders", "📦"],
-            ["KES 48k", "Spent", "💰"],
-            [addresses.length.toString(), "Addresses", "📍"]
+            [realOrders.length, "Orders", "📦"],
+            [`KSh ${totalSpent.toLocaleString()}`, "Spent", "💰"],
+            [addresses.length, "Addresses", "📍"],
           ].map(([n, l, icon]) => (
             <div key={l} style={{ background: "rgba(0,0,0,0.3)", borderRadius: 10, padding: "10px 8px", textAlign: "center", border: "1px solid #1a4a22" }}>
               <div style={{ fontSize: 16 }}>{icon}</div>
@@ -200,13 +199,13 @@ export default function Profile() {
                 <>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                     {[["First name", personal.firstName], ["Last name", personal.lastName]].map(([label, val]) => (
-                      <div key={label}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>{label}</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{val}</div></div>
+                      <div key={label}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>{label}</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{val || '—'}</div></div>
                     ))}
                   </div>
-                  <div style={{ marginBottom: 10 }}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>Email</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{personal.email}</div></div>
+                  <div style={{ marginBottom: 10 }}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>Email</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{personal.email || '—'}</div></div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     {[["Phone", personal.phone], ["Account type", personal.accountType]].map(([label, val]) => (
-                      <div key={label}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>{label}</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{val}</div></div>
+                      <div key={label}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>{label}</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{val || '—'}</div></div>
                     ))}
                   </div>
                 </>
@@ -236,10 +235,10 @@ export default function Profile() {
               </div>
               {!editingBiz ? (
                 <>
-                  <div style={{ marginBottom: 10 }}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>Business name</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{biz.businessName}</div></div>
+                  <div style={{ marginBottom: 10 }}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>Business name</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{biz.businessName || '—'}</div></div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     {[["KRA PIN", biz.kraPin], ["Business type", biz.bizType]].map(([label, val]) => (
-                      <div key={label}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>{label}</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{val}</div></div>
+                      <div key={label}><label style={{ fontSize: 11, color: "#5a8a65", display: "block", marginBottom: 3 }}>{label}</label><div style={{ color: "#c8e6cc", fontSize: 14, background: "#071510", border: "1px solid #1a4a22", borderRadius: 6, padding: "8px 10px" }}>{val || '—'}</div></div>
                     ))}
                   </div>
                 </>
@@ -260,7 +259,7 @@ export default function Profile() {
           </>
         )}
 
-        {/* ORDERS TAB — real data */}
+        {/* ORDERS TAB */}
         {activeTab === "orders" && (
           <div style={{ background: "#0d2a14", border: "1px solid #1a4a22", borderRadius: 12, padding: 18 }}>
             <div style={{ color: "#7faa8a", fontSize: 12, textTransform: "uppercase", marginBottom: 16, letterSpacing: 1 }}>📦 Recent Orders</div>
@@ -283,7 +282,7 @@ export default function Profile() {
                   <div style={{ color: "#e6a817", fontSize: 13, fontWeight: "bold" }}>KSh {order.totalAmount?.toLocaleString()}</div>
                   <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 99, fontWeight: "bold", display: "inline-block", marginTop: 4, ...(statusColors[order.status] || { background: "#1a2a4a", color: "#5a9ae6" }) }}>{order.status}</span>
                   <div style={{ marginTop: 6 }}>
-                    <button onClick={() => navigate(`/orders`)} style={{ background: "none", border: "1px solid #1a4a22", color: "#4aa85a", fontSize: 11, padding: "3px 8px", borderRadius: 5, cursor: "pointer" }}>Track</button>
+                    <button onClick={() => navigate('/orders')} style={{ background: "none", border: "1px solid #1a4a22", color: "#4aa85a", fontSize: 11, padding: "3px 8px", borderRadius: 5, cursor: "pointer" }}>Track</button>
                   </div>
                 </div>
               </div>
@@ -308,6 +307,9 @@ export default function Profile() {
                   <button onClick={saveAddress} style={{ background: "#1d6b2a", border: "none", color: "#a8e6b4", fontSize: 13, padding: "7px 14px", borderRadius: 7, cursor: "pointer" }}>Save address</button>
                 </div>
               </div>
+            )}
+            {addresses.length === 0 && !isEditingAddress && (
+              <div style={{ textAlign: "center", padding: 30, color: "#5a8a65" }}>No addresses saved yet.</div>
             )}
             {addresses.map(address => (
               <div key={address.id} style={{ background: "#071510", border: "1px solid #1a4a22", borderRadius: 8, padding: 14, marginBottom: 10, position: "relative" }}>
@@ -346,7 +348,7 @@ export default function Profile() {
             <div style={{ background: "#0d2a14", border: "1px solid #1a4a22", borderRadius: 12, padding: 18, marginBottom: 12 }}>
               <div style={{ color: "#7faa8a", fontSize: 12, textTransform: "uppercase", marginBottom: 4, letterSpacing: 1 }}>🔐 Security</div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0" }}>
-                <div><div style={{ color: "#c8e6cc", fontSize: 13 }}>Change password</div><div style={{ color: "#5a8a65", fontSize: 11, marginTop: 2 }}>Last changed 3 months ago</div></div>
+                <div><div style={{ color: "#c8e6cc", fontSize: 13 }}>Change password</div><div style={{ color: "#5a8a65", fontSize: 11, marginTop: 2 }}>Update your account password</div></div>
                 <button onClick={handleTogglePasswordForm} style={{ background: "none", border: "1px solid #2a6a35", color: "#6daa7a", fontSize: 12, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>Update</button>
               </div>
             </div>

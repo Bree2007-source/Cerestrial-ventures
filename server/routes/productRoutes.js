@@ -1,6 +1,7 @@
 import express from 'express'
 import Product from '../models/Product.js'
 import User from '../models/User.js'
+import Notification from '../models/Notification.js'
 import { protect, adminOnly } from '../middleware/adminMiddleware.js'
 import { sendEmail, sendSms } from '../utils/notifications.js'
 
@@ -60,26 +61,34 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
 
     const prevStock = existingProduct.countInStock
     const nextStock = updatedProduct.countInStock
+
+    // Notify admins when stock drops to 5 or below
+    if (nextStock <= 5 && nextStock < prevStock) {
+      await Notification.create({
+        isAdminNotification: true,
+        title: `Low Stock Alert ⚠️`,
+        message: `${updatedProduct.name} is running low — only ${nextStock} unit${nextStock === 1 ? '' : 's'} left.`,
+        type: 'low_stock',
+        link: '/admin',
+      })
+    }
+
+    // Notify users on wishlist when item is back in stock
     if (prevStock === 0 && nextStock > 0) {
       const users = await User.find({
         'notificationPreferences.restock': true,
         wishlist: updatedProduct._id,
       })
-
-      const restockMessage = `Good news! ${updatedProduct.name} is back in stock at Cerestrial Ventures. Order now while quantities last.`
+      const restockMessage = `Good news! ${updatedProduct.name} is back in stock at Cerestrial Ventures.`
       await Promise.allSettled(users.map((user) => {
         const tasks = []
-        if (user.phone) {
-          tasks.push(sendSms({ to: user.phone, message: restockMessage }))
-        }
-        if (user.email) {
-          tasks.push(sendEmail({
-            to: user.email,
-            subject: `${updatedProduct.name} is back in stock!`,
-            text: restockMessage,
-            html: `<p>${restockMessage}</p>`,
-          }))
-        }
+        if (user.phone) tasks.push(sendSms({ to: user.phone, message: restockMessage }))
+        if (user.email) tasks.push(sendEmail({
+          to: user.email,
+          subject: `${updatedProduct.name} is back in stock!`,
+          text: restockMessage,
+          html: `<p>${restockMessage}</p>`,
+        }))
         return Promise.all(tasks)
       }))
     }
@@ -90,33 +99,22 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
   }
 })
 
-// POST send promotion broadcast
+// POST promotion broadcast
 router.post('/promotions', protect, adminOnly, async (req, res) => {
   try {
     const { subject, message } = req.body
     if (!subject || !message) {
       return res.status(400).json({ message: 'Subject and message are required' })
     }
-
-    const filter = { 'notificationPreferences.promotions': true }
-    const users = await User.find(filter)
-    const broadcastText = message
+    const users = await User.find({ 'notificationPreferences.promotions': true })
     await Promise.allSettled(users.map((user) => {
       const tasks = []
-      if (user.phone) {
-        tasks.push(sendSms({ to: user.phone, message: `${subject}\n\n${broadcastText}` }))
-      }
-      if (user.email) {
-        tasks.push(sendEmail({
-          to: user.email,
-          subject,
-          text: broadcastText,
-          html: `<p>${broadcastText}</p>`,
-        }))
-      }
+      if (user.phone) tasks.push(sendSms({ to: user.phone, message: `${subject}\n\n${message}` }))
+      if (user.email) tasks.push(sendEmail({
+        to: user.email, subject, text: message, html: `<p>${message}</p>`,
+      }))
       return Promise.all(tasks)
     }))
-
     res.json({ message: 'Promotion broadcast sent', recipients: users.length })
   } catch (error) {
     res.status(500).json({ message: error.message })
@@ -134,17 +132,13 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
   }
 })
 
-// POST add a review to a product
+// POST add review
 router.post('/:id/reviews', protect, async (req, res) => {
   try {
     const product = await Product.findById(req.params.id)
     if (!product) return res.status(404).json({ message: 'Product not found' })
-
     const { rating, comment } = req.body
-    if (!rating || !comment) {
-      return res.status(400).json({ message: 'Rating and comment are required' })
-    }
-
+    if (!rating || !comment) return res.status(400).json({ message: 'Rating and comment are required' })
     const existingReview = product.reviews.find(
       (review) => review.user.toString() === req.user._id.toString()
     )
@@ -159,10 +153,8 @@ router.post('/:id/reviews', protect, async (req, res) => {
         comment,
       })
     }
-
     product.numReviews = product.reviews.length
     product.rating = product.reviews.reduce((sum, item) => sum + item.rating, 0) / product.reviews.length
-
     await product.save()
     res.status(201).json({ message: 'Review submitted successfully', reviews: product.reviews })
   } catch (error) {

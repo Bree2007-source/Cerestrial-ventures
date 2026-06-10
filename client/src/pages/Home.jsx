@@ -3,6 +3,7 @@ import { useCart } from '../context/CartContext';
 import { useTheme } from '../context/ThemeContext';
 import { useLocation } from 'react-router-dom';
 import axios from 'axios';
+import API_BASE_URL from '../config';
 
 const Home = ({ selectedCategory }) => {
   const { addToCart, cartItems } = useCart();
@@ -22,7 +23,7 @@ const Home = ({ selectedCategory }) => {
     const fetchProducts = async () => {
       try {
         setLoadingProducts(true);
-        const res = await axios.get('http://localhost:5000/api/products');
+        const res = await axios.get(`${API_BASE_URL}/products`);
         setProducts(res.data);
       } catch (err) {
         setFetchError('Could not load products. Is the server running?');

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Offline — Cerestrial Ventures</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: sans-serif;
+      background: #f8fafc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .card {
+      background: white;
+      border-radius: 20px;
+      padding: 50px 40px;
+      text-align: center;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.08);
+      max-width: 400px;
+      width: 100%;
+    }
+    .emoji { font-size: 70px; margin-bottom: 20px; }
+    h1 { color: #1e293b; font-size: 24px; margin-bottom: 12px; }
+    p { color: #64748b; font-size: 15px; line-height: 1.6; margin-bottom: 25px; }
+    button {
+      background: #166534;
+      color: white;
+      border: none;
+      padding: 14px 30px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      width: 100%;
+    }
+    button:hover { background: #15803d; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="emoji">🌾</div>
+    <h1>You're Offline</h1>
+    <p>No internet connection. Check your connection and try again. Your cart is safely saved!</p>
+    <button onclick="window.location.reload()">🔄 Try Again</button>
+  </div>
+</body>
+</html>
