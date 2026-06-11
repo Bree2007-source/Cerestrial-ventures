@@ -89,15 +89,15 @@ const ensureAdminUser = async () => {
       const admin = new User({
         name: 'Admin',
         email: 'admin@cerestrial.com',
-        password: 'admin123',
+        password: process.env.ADMIN_PASSWORD || 'Cerestrial@Admin2024!',
         isAdmin: true
       })
       await admin.save()
-      console.log('✅ Default admin user created: admin@cerestrial.com / admin123')
+      console.log('✅ Default admin user created: admin@cerestrial.com')
     } else if (!existingAdmin.isAdmin) {
       existingAdmin.isAdmin = true
       await existingAdmin.save()
-      console.log('✅ Existing admin user updated with isAdmin=true')
+      console.log('✅ Existing user updated with isAdmin=true')
     }
   } catch (error) {
     console.error('❌ Admin bootstrap error:', error.message)
