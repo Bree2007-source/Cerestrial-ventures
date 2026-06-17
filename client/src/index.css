@@ -3,10 +3,6 @@
 :root {
   color-scheme: light;
   --bg: #f8fafc;
-  ...
-:root {
-  color-scheme: light;
-  --bg: #f8fafc;
   --surface: #ffffff;
   --text: #0f172a;
   --text-muted: #64748b;
@@ -30,6 +26,8 @@
 
 html, body, #root {
   min-height: 100%;
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 body {
@@ -41,4 +39,8 @@ body {
   padding-bottom: 92px;
 }
 
-@import "tailwindcss";
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
