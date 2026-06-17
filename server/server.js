@@ -1,7 +1,6 @@
-
 import dotenv from 'dotenv'
 dotenv.config()
- 
+
 import express from 'express'
 import mongoose from 'mongoose'
 import cors from 'cors'
@@ -9,7 +8,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import http from 'http'
 import { Server } from 'socket.io'
- 
+
 import authRoutes from './routes/authRoutes.js'
 import productRoutes from './routes/productRoutes.js'
 import orderRoutes from './routes/orderRoutes.js'
@@ -20,18 +19,21 @@ import uploadRoutes from './routes/uploadRoutes.js'
 import paymentRoutes from './routes/payment.js'
 import notificationRoutes from './routes/notificationRoutes.js'
 import User from './models/User.js'
- 
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
- 
+
 const app = express()
 const httpServer = http.createServer(app)
- 
+
 const allowedOrigins = [
   /^http:\/\/localhost(:\d+)?$/,
-  'https://aesthetic-chimera-0d58ee.netlify.app'
+  'https://aesthetic-chimera-0d58ee.netlify.app',
+  'https://cerestrial-ventures.netlify.app',
+  /^https:\/\/[a-z0-9]+--cerestrial-ventures\.netlify\.app$/,
+  /^https:\/\/[a-z0-9]+-cerestrial-ventures\.netlify\.app$/
 ]
- 
+
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
@@ -39,22 +41,22 @@ const io = new Server(httpServer, {
     credentials: true
   }
 })
- 
+
 app.set('io', io)
- 
+
 io.on('connection', (socket) => {
   console.log('🟢 Customer connected via socket:', socket.id)
- 
+
   socket.on('join_order', (orderId) => {
     socket.join(orderId)
     console.log(`📦 Socket ${socket.id} is now tracking order: ${orderId}`)
   })
- 
+
   socket.on('disconnect', () => {
     console.log('🔴 Customer disconnected:', socket.id)
   })
 })
- 
+
 app.use(cors({
   origin: allowedOrigins,
   credentials: true
@@ -62,11 +64,11 @@ app.use(cors({
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
- 
+
 app.get('/', (req, res) => {
   res.send('🚀 Cerestrial Ventures API is running operational!')
 })
- 
+
 app.use('/api/auth', authRoutes)
 app.use('/api/products', productRoutes)
 app.use('/api/orders', orderRoutes)
@@ -76,18 +78,27 @@ app.use('/api/coupons', couponRoutes)
 app.use('/api/upload', uploadRoutes)
 app.use('/api/payments', paymentRoutes)
 app.use('/api/notifications', notificationRoutes)
- 
+
+// Global Error Handler
 app.use((err, req, res, next) => {
-  console.error('❌ Server Error:', err.stack)
-  res.status(500).json({ success: false, message: 'Internal Server Error' })
+  const message = err?.message || 'Internal Server Error'
+  const stack = err?.stack || String(err)
+  console.error('❌ Server Error:', stack)
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ success: false, message: 'File too large. Max 5MB.' })
+  }
+  if (err?.name === 'MulterError') {
+    return res.status(400).json({ success: false, message: 'Upload error: ' + message })
+  }
+  res.status(err?.status || 500).json({ success: false, message })
 })
- 
+
 const PORT = process.env.PORT || 5000
- 
+
 if (!process.env.MONGO_URI) {
   console.warn('⚠️ WARNING: MONGO_URI is missing from .env file!')
 }
- 
+
 const ensureAdminUser = async () => {
   try {
     const existingAdmin = await User.findOne({ email: 'admin@cerestrial.com' })
@@ -109,12 +120,12 @@ const ensureAdminUser = async () => {
     console.error('❌ Admin bootstrap error:', error.message)
   }
 }
- 
+
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/cerestrial')
   .then(async () => {
     console.log('✅ Connected safely to MongoDB.')
     await ensureAdminUser()
- 
+
     httpServer.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
         console.error(`❌ Port ${PORT} is already in use.`)
@@ -123,7 +134,7 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/cerestrial'
       console.error('❌ Server error:', err)
       process.exit(1)
     })
- 
+
     httpServer.listen(PORT, () => {
       console.log(`🚀 Cerestrial Backend running on port ${PORT}`)
       console.log(`🔌 Socket.io is active and listening`)
@@ -132,4 +143,3 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/cerestrial'
   .catch((err) => {
     console.error('❌ Database connection error:', err.message)
   })
- 
