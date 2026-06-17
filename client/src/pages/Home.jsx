@@ -4,17 +4,19 @@ import { useTheme } from '../context/ThemeContext';
 import { useCart } from '../context/CartContext';
 import './Home.css';
 
+const API = import.meta.env.VITE_API_BASE_URL;
+
 const CATEGORIES = [
-  { name: 'Sugar',                    emoji: '🍬' },
-  { name: 'Wheat Flour',              emoji: '🌾' },
-  { name: 'Maize Flour',              emoji: '🌽' },
-  { name: 'Cooking Oil',              emoji: '🫗' },
-  { name: 'Milk',                     emoji: '🥛' },
-  { name: 'Cereals',                  emoji: '🥣' },
-  { name: 'Snacks & Sweets',          emoji: '🍿' },
-  { name: 'Spices',                   emoji: '🌶️' },
-  { name: 'Bar Soaps',                emoji: '🧼' },
-  { name: 'Water',                    emoji: '💧' },
+  { name: 'Sugar',           emoji: '🍬' },
+  { name: 'Wheat Flour',     emoji: '🌾' },
+  { name: 'Maize Flour',     emoji: '🌽' },
+  { name: 'Cooking Oil',     emoji: '🫗' },
+  { name: 'Milk',            emoji: '🥛' },
+  { name: 'Cereals',         emoji: '🥣' },
+  { name: 'Snacks & Sweets', emoji: '🍿' },
+  { name: 'Spices',          emoji: '🌶️' },
+  { name: 'Bar Soaps',       emoji: '🧼' },
+  { name: 'Water',           emoji: '💧' },
 ];
 
 const SLIDES = [
@@ -23,12 +25,15 @@ const SLIDES = [
   { bg: 'linear-gradient(135deg,#1d4ed8,#60a5fa)', title: 'Bulk Savings 💰',    sub: 'Buy more, save more on every order.' },
 ];
 
-export default function Home({ products = [] }) {
+export default function Home({ selectedCategory: propCategory }) {
   const navigate  = useNavigate();
   const location  = useLocation();
   const { theme } = useTheme();
   const { addToCart, cartItems } = useCart();
 
+  const [products, setProducts] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState(null);
   const [search,   setSearch]   = useState('');
   const [category, setCategory] = useState(location.state?.category || 'All');
   const [slide,    setSlide]    = useState(0);
@@ -36,13 +41,28 @@ export default function Home({ products = [] }) {
 
   const isDark = theme === 'dark';
 
-  // ── auto-advance carousel
+  // fetch products from backend
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API}/products`)
+      .then(r => r.json())
+      .then(data => {
+        setProducts(Array.isArray(data) ? data : data.products || []);
+        setLoading(false);
+      })
+      .catch(() => {
+        setError('Could not load products. Please try again.');
+        setLoading(false);
+      });
+  }, []);
+
+  // auto-advance carousel
   useEffect(() => {
     timerRef.current = setInterval(() => setSlide(s => (s + 1) % SLIDES.length), 4000);
     return () => clearInterval(timerRef.current);
   }, []);
 
-  // ── pick up category from CategoriesPage navigation
+  // pick up category from CategoriesPage navigation
   useEffect(() => {
     if (location.state?.category) setCategory(location.state.category);
   }, [location.state]);
@@ -53,17 +73,17 @@ export default function Home({ products = [] }) {
     return matchCat && matchSearch;
   });
 
-  const cartCount = cartItems?.reduce((n, i) => n + i.qty, 0) ?? 0;
+  const cartCount = cartItems?.reduce((n, i) => n + (i.quantity || i.qty || 0), 0) ?? 0;
 
-  const surface  = isDark ? '#111827' : '#ffffff';
-  const textMain = isDark ? '#e2e8f0' : '#0f172a';
-  const textMuted= isDark ? '#94a3b8' : '#64748b';
-  const border   = isDark ? 'rgba(148,163,184,0.15)' : '#e2e8f0';
+  const surface   = isDark ? '#111827' : '#ffffff';
+  const textMain  = isDark ? '#e2e8f0' : '#0f172a';
+  const textMuted = isDark ? '#94a3b8' : '#64748b';
+  const border    = isDark ? 'rgba(148,163,184,0.15)' : '#e2e8f0';
 
   return (
     <div className="home-container" style={{ background: isDark ? '#0b1120' : '#f8fafc', color: textMain }}>
 
-      {/* ── HERO CAROUSEL ── */}
+      {/* HERO CAROUSEL */}
       <div className="hero-carousel" aria-label="Promotions">
         <div className="hero-track" style={{ transform: `translateX(-${slide * 100}%)` }}>
           {SLIDES.map((s, i) => (
@@ -89,7 +109,7 @@ export default function Home({ products = [] }) {
 
       <div className="home-content">
 
-        {/* ── SEARCH ── */}
+        {/* SEARCH */}
         <div className="search-section">
           <div className="search-bar-wrap">
             <span className="search-icon">🔍</span>
@@ -107,7 +127,7 @@ export default function Home({ products = [] }) {
           </div>
         </div>
 
-        {/* ── ICON CATEGORY ROW ── */}
+        {/* CATEGORY ROW */}
         <p className="section-title" style={{ color: textMain }}>Categories</p>
         <div className="icon-categories-row">
           {[{ name: 'All', emoji: '🏪' }, ...CATEGORIES].map(cat => (
@@ -135,15 +155,26 @@ export default function Home({ products = [] }) {
           ))}
         </div>
 
-        {/* ── PRODUCTS ── */}
+        {/* PRODUCTS HEADER */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '20px', marginBottom: '12px' }}>
           <p className="section-title" style={{ color: textMain, margin: 0 }}>
-            {category === 'All' ? '🛍️ All Products' : `${category}`}
+            {category === 'All' ? '🛍️ All Products' : category}
           </p>
           <span style={{ fontSize: '12px', color: textMuted }}>{filtered.length} items</span>
         </div>
 
-        {filtered.length === 0 ? (
+        {/* PRODUCTS BODY */}
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: textMuted }}>
+            <div style={{ fontSize: '32px', marginBottom: '12px' }}>⏳</div>
+            <p>Loading products...</p>
+          </div>
+        ) : error ? (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: '#ef4444' }}>
+            <div style={{ fontSize: '32px', marginBottom: '12px' }}>⚠️</div>
+            <p>{error}</p>
+          </div>
+        ) : filtered.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px 20px', color: textMuted }}>
             <div style={{ fontSize: '48px', marginBottom: '12px' }}>😕</div>
             <p>No products found{search ? ` for "${search}"` : ''}.</p>
@@ -159,7 +190,6 @@ export default function Home({ products = [] }) {
                   style={{ background: surface, border: `1px solid ${border}`, position: 'relative', cursor: 'pointer' }}
                   onClick={() => navigate(`/product/${product._id}`)}
                 >
-                  {/* ── BADGES ── */}
                   {product.countInStock === 0 && (
                     <span className="badge badge-out-of-stock">Out of stock</span>
                   )}
@@ -170,7 +200,6 @@ export default function Home({ products = [] }) {
                     <span className="badge badge-in-cart">✓ In cart</span>
                   )}
 
-                  {/* ── IMAGE ── */}
                   <div className="product-img-wrapper">
                     <img
                       src={product.image}
@@ -181,7 +210,6 @@ export default function Home({ products = [] }) {
                     />
                   </div>
 
-                  {/* ── BODY ── */}
                   <div className="product-card-body">
                     <span className="category-pill" style={{ background: isDark ? 'rgba(74,222,128,0.15)' : '#dcfce7', color: '#15803d' }}>
                       {product.category}
@@ -221,7 +249,7 @@ export default function Home({ products = [] }) {
         )}
       </div>
 
-      {/* ── FLOATING CART ── */}
+      {/* FLOATING CART */}
       {cartCount > 0 && (
         <button className="floating-cart-btn" onClick={() => navigate('/cart')}>
           🛒
