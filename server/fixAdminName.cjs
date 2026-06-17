@@ -1,0 +1,24 @@
+require('dotenv').config();
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+
+async function run() {
+  await mongoose.connect(process.env.MONGO_URI);
+
+  const hashed = await bcrypt.hash('admin@1234', 10);
+
+  const db = mongoose.connection.useDb('celestrial');
+
+  const result = await db.collection('users').updateOne(
+    { _id: new mongoose.Types.ObjectId('6a2a6224959561fbb06843b1') },
+    { $set: { password: hashed, isAdmin: true } }
+  );
+
+  console.log('Matched:', result.matchedCount, 'Modified:', result.modifiedCount);
+  console.log('Login email: admin@cerestrial.com');
+  console.log('Login password: admin@1234');
+
+  await mongoose.connection.close();
+}
+
+run();

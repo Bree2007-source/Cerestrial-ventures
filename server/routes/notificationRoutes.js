@@ -58,11 +58,22 @@ router.get('/unread-count', protect, async (req, res) => {
 // PATCH /api/notifications/:id/read
 router.patch('/:id/read', protect, async (req, res) => {
   try {
-    const notification = await Notification.findByIdAndUpdate(
-      req.params.id,
+    const query = req.user.isAdmin
+      ? {
+          _id: req.params.id,
+          $or: [
+            { userId: req.user._id },
+            { isAdminNotification: true }
+          ]
+        }
+      : { _id: req.params.id, userId: req.user._id, isAdminNotification: false }
+
+    const notification = await Notification.findOneAndUpdate(
+      query,
       { read: true },
       { new: true }
     )
+
     if (!notification) return res.status(404).json({ message: 'Notification not found' })
     res.json(notification)
   } catch (error) {
