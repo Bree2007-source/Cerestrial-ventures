@@ -1,0 +1,26 @@
+@media (max-width: 768px) {
+  .header-top-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .header-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start !important;
+    width: 100%;
+    gap: 8px !important;
+  }
+  .header-actions a, .header-actions button {
+    font-size: 12px !important;
+    padding: 6px 10px !important;
+  }
+  .header-title h2 {
+    font-size: 18px !important;
+  }
+}
+
+@media (max-width: 400px) {
+  .header-actions a,
+  .header-actions button {
+    font-size: 11px !important;
+  }
+}

@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
+import './Header.css';
 
 const Header = ({ selectedCategory, setSelectedCategory }) => {
   const location = useLocation();
@@ -49,14 +50,14 @@ const Header = ({ selectedCategory, setSelectedCategory }) => {
   return (
     <header style={{ backgroundColor: '#15803d', color: 'white', padding: '15px 20px', fontFamily: 'sans-serif' }}>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isAdminPage ? '0px' : '15px' }}>
+      <div className="header-top-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isAdminPage ? '0px' : '15px' }}>
 
-        <Link to="/" style={{ textDecoration: 'none', color: 'white' }}>
+        <Link to="/" className="header-title" style={{ textDecoration: 'none', color: 'white' }}>
           <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 'bold' }}>🌾 CERESTRIAL VENTURES</h2>
           <span style={{ fontSize: '12px', opacity: 0.8 }}>Wholesale & Retail Grocers</span>
         </Link>
 
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }}>
+        <div className="header-actions" style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }}>
 
           {/* NOTIFICATION BELL */}
           <div ref={bellRef} style={{ position: 'relative' }}>
@@ -91,7 +92,7 @@ const Header = ({ selectedCategory, setSelectedCategory }) => {
             {bellOpen && (
               <div style={{
                 position: 'absolute', top: 'calc(100% + 10px)', right: 0,
-                width: 320, backgroundColor: '#fff', color: '#0f172a',
+                width: 320, maxWidth: '90vw', backgroundColor: '#fff', color: '#0f172a',
                 borderRadius: 14, boxShadow: '0 18px 40px rgba(15,23,42,0.18)',
                 zIndex: 50, overflow: 'hidden'
               }}>
@@ -248,7 +249,7 @@ const Header = ({ selectedCategory, setSelectedCategory }) => {
       </div>
 
       {!isAdminPage && (
-        <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '5px', marginTop: '10px' }}>
+        <div className="category-chips" style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '5px', marginTop: '10px' }}>
           {categories.map((cat) => (
             <button
               key={cat}

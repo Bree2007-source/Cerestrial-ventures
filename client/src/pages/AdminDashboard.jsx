@@ -25,10 +25,9 @@ const AdminDashboard = () => {
   const [sendingPromotion, setSendingPromotion] = useState(false);
   const [promotionResult, setPromotionResult] = useState('');
 
-  const categories = [
-    'Sugar', 'Rice', 'Cooking Oil', 'Maize Flour', 'Wheat Flour',
-    'Cereals', 'Snacks', 'Beverages', 'Cleaning Products', 'Baby Products'
-  ];
+  // ── Category list is built dynamically from existing products ──
+  // This keeps it in sync with the Shop page filters automatically.
+  const categories = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem('cv-token');
@@ -373,6 +372,9 @@ const AdminDashboard = () => {
                     <select required value={formData.category} style={inp} onChange={e => setFormData({...formData, category: e.target.value})}>
                       <option value="">-- Select --</option>
                       {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                      {formData.category && !categories.includes(formData.category) && (
+                        <option value={formData.category}>{formData.category}</option>
+                      )}
                     </select>
                   </div>
                   <div>
