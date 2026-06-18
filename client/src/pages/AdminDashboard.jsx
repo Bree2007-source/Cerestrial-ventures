@@ -53,7 +53,7 @@ const AdminDashboard = () => {
   const [imagePreview, setImagePreview] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const fileInputRef = useRef();
+  const fileInputRef = useRef(null);
 
   const [formData, setFormData] = useState({
     name: '', category: '', retailPrice: '', wholesalePrice: '',
@@ -523,12 +523,17 @@ const AdminDashboard = () => {
                   <div style={{ gridColumn: '1 / -1' }}>
                     <label style={lbl}>Product Image</label>
                     <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                      <div onClick={() => fileInputRef.current.click()} style={{ width: 120, height: 120, borderRadius: 10, border: '2px dashed #cbd5e1', overflow: 'hidden', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', flexShrink: 0 }} onMouseOver={e => e.currentTarget.style.borderColor = '#15803d'} onMouseOut={e => e.currentTarget.style.borderColor = '#cbd5e1'}>
+                      <div
+                        onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                        style={{ width: 120, height: 120, borderRadius: 10, border: '2px dashed #cbd5e1', overflow: 'hidden', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', flexShrink: 0 }}
+                        onMouseOver={e => e.currentTarget.style.borderColor = '#15803d'}
+                        onMouseOut={e => e.currentTarget.style.borderColor = '#cbd5e1'}
+                      >
                         {imagePreview ? <img src={imagePreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ textAlign: 'center', color: '#94a3b8' }}><div style={{ fontSize: 32 }}>📷</div><div style={{ fontSize: 11, marginTop: 5 }}>Click to upload</div></div>}
                       </div>
                       <div style={{ flex: 1, minWidth: 200 }}>
                         <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageSelect} style={{ display: 'none' }} />
-                        <button type="button" onClick={() => fileInputRef.current.click()} style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 'bold', fontSize: 14, marginBottom: 10, display: 'block' }}>📁 Choose Image File</button>
+                        <button type="button" onClick={() => fileInputRef.current && fileInputRef.current.click()} style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 'bold', fontSize: 14, marginBottom: 10, display: 'block' }}>📁 Choose Image File</button>
                         {imageFile && <div style={{ fontSize: 12, color: '#15803d', marginBottom: 8 }}>✅ {imageFile.name} ({(imageFile.size / 1024).toFixed(0)}KB)</div>}
                         <div style={{ color: '#64748b', fontSize: 12, marginBottom: 8 }}>Or paste an image URL:</div>
                         <input value={formData.image} style={{ ...inp, fontSize: 12 }} placeholder="https://res.cloudinary.com/..." onChange={e => { setFormData({ ...formData, image: e.target.value }); setImagePreview(e.target.value); setImageFile(null); }} />
