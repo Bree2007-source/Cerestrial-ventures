@@ -1,17 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Chart as ChartJS,
-  CategoryScale, LinearScale, BarElement, LineElement,
-  PointElement, Title, Tooltip, Legend, Filler
-} from 'chart.js';
-import { Bar, Line } from 'react-chartjs-2';
 import API_BASE_URL from '../config';
-
-ChartJS.register(
-  CategoryScale, LinearScale, BarElement, LineElement,
-  PointElement, Title, Tooltip, Legend, Filler
-);
 
 const fmt = (n) => `KSh ${Number(n || 0).toLocaleString()}`;
 
@@ -38,6 +27,21 @@ const StatCard = ({ label, value, sub, accent, icon }) => (
     {sub && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>{sub}</div>}
   </div>
 );
+
+const SimpleBarChart = ({ data, labels, color, formatter }) => {
+  const max = Math.max(...data, 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 180, padding: '10px 0' }}>
+      {data.map((val, i) => (
+        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
+          <div style={{ fontSize: 9, color: '#94a3b8' }}>{formatter ? formatter(val) : val}</div>
+          <div style={{ width: '100%', backgroundColor: color, borderRadius: '4px 4px 0 0', height: `${(val / max) * 140}px`, minHeight: val > 0 ? 4 : 0, transition: 'height 0.3s' }} />
+          <div style={{ fontSize: 9, color: '#94a3b8', textAlign: 'center' }}>{labels[i]}</div>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
@@ -133,45 +137,6 @@ const AdminDashboard = () => {
   );
 
   const chartLabels = months.map(m => m.label);
-
-  const ordersChartData = {
-    labels: chartLabels,
-    datasets: [{
-      label: 'Orders',
-      data: ordersByMonth,
-      backgroundColor: '#16a34a',
-      borderRadius: 5,
-      borderSkipped: false,
-    }],
-  };
-
-  const revenueChartData = {
-    labels: chartLabels,
-    datasets: [{
-      label: 'Revenue (KSh)',
-      data: revenueByMonth,
-      borderColor: '#3b82f6',
-      backgroundColor: 'rgba(59,130,246,0.08)',
-      fill: true,
-      tension: 0.4,
-      pointRadius: 4,
-      borderWidth: 2,
-    }],
-  };
-
-  const chartOptions = (yFormatter) => ({
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { color: '#94a3b8', font: { size: 11 } } },
-      y: {
-        grid: { color: 'rgba(0,0,0,0.05)' },
-        ticks: { color: '#94a3b8', font: { size: 11 }, callback: yFormatter },
-        beginAtZero: true,
-      },
-    },
-  });
 
   const handleImageSelect = (e) => {
     const file = e.target.files[0];
@@ -357,9 +322,7 @@ const AdminDashboard = () => {
             <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 10, padding: '18px 20px' }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>Monthly Orders</div>
               <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 14 }}>Last 6 months</div>
-              <div style={{ position: 'relative', height: 220 }}>
-                <Bar data={ordersChartData} options={chartOptions(v => v)} />
-              </div>
+              <SimpleBarChart data={ordersByMonth} labels={chartLabels} color="#16a34a" />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 11, color: '#64748b' }}>
                 <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#16a34a' }} /> Orders
               </div>
@@ -368,13 +331,7 @@ const AdminDashboard = () => {
             <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 10, padding: '18px 20px' }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>Revenue Trend</div>
               <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 14 }}>Last 6 months (KSh)</div>
-              <div style={{ position: 'relative', height: 220 }}>
-                <Line data={revenueChartData} options={chartOptions(v => {
-                  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-                  if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
-                  return v;
-                })} />
-              </div>
+              <SimpleBarChart data={revenueByMonth} labels={chartLabels} color="#3b82f6" formatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v} />
               <div style={{ display: 'flex', gap: 12, marginTop: 10, fontSize: 11, color: '#64748b' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#3b82f6' }} /> Revenue
