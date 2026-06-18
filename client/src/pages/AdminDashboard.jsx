@@ -345,61 +345,63 @@ const AdminDashboard = () => {
       {/* ORDERS TAB */}
       {activeTab === 'orders' && (
         <div style={{ backgroundColor: 'white', border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead>
-              <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                {['ID / Customer', 'Items', 'Total', '📍 Delivery Location', 'Status'].map(h => (
-                  <th key={h} style={{ padding: '13px 15px', textAlign: 'left', color: '#475569', fontWeight: 600 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {orders.length === 0 ? (
-                <tr><td colSpan="5" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>No orders yet.</td></tr>
-              ) : orders.map(order => (
-                <tr key={order._id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '13px 15px' }}>
-                    <strong style={{ color: '#15803d', fontSize: 13 }}>#{order._id.slice(-6).toUpperCase()}</strong>
-                    <div style={{ fontWeight: 'bold', color: '#1e293b' }}>{order.customerName}</div>
-                    <div style={{ fontSize: 12, color: '#94a3b8' }}>{order.phone}</div>
-                  </td>
-                  <td style={{ padding: '13px 15px', fontSize: 13 }}>
-                    {order.items?.map((item, i) => (
-                      <div key={i} style={{ marginBottom: 2 }}>{item.name} <span style={{ color: '#94a3b8' }}>×{item.quantity}</span></div>
-                    ))}
-                  </td>
-                  <td style={{ padding: '13px 15px', fontWeight: 'bold', color: '#15803d' }}>{fmt(order.totalAmount)}</td>
-                  <td style={{ padding: '13px 15px' }}>
-                    <div style={{ fontSize: 13, color: '#334155', marginBottom: 4 }}>
-                      {order.location || <span style={{ color: '#94a3b8' }}>No address</span>}
-                    </div>
-                    {order.latitude && order.longitude ? (
-                      <>
-                        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>{order.latitude.toFixed(5)}, {order.longitude.toFixed(5)}</div>
-                        <button onClick={() => window.open(`https://www.google.com/maps?q=${order.latitude},${order.longitude}`, '_blank')} style={{ padding: '5px 11px', backgroundColor: '#1d4ed8', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>🗺️ Open Location</button>
-                      </>
-                    ) : (
-                      <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠️ No pin saved</span>
-                    )}
-                  </td>
-                  <td style={{ padding: '13px 15px' }}>
-                    <select value={order.status} onChange={e => handleStatusChange(order._id, e.target.value)}
-                      style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #e2e8f0', fontWeight: 'bold', cursor: 'pointer', fontSize: 13, backgroundColor: order.status === 'Pending' ? '#fef3c7' : order.status === 'Delivered' ? '#dcfce7' : order.status === 'Paid' ? '#dbeafe' : '#f1f5f9', color: order.status === 'Pending' ? '#b45309' : order.status === 'Delivered' ? '#15803d' : order.status === 'Paid' ? '#1d4ed8' : '#334155' }}>
-                      <option value="Pending">⏳ Pending</option>
-                      <option value="Order Received">📬 Order Received</option>
-                      <option value="Payment Confirmed">✅ Payment Confirmed</option>
-                      <option value="Paid">💰 Paid</option>
-                      <option value="Processing Order">⚙️ Processing</option>
-                      <option value="Packed">📦 Packed</option>
-                      <option value="Out for Delivery">🚚 Out for Delivery</option>
-                      <option value="Delivered">🏁 Delivered</option>
-                      <option value="Cancelled">❌ Cancelled</option>
-                    </select>
-                  </td>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, minWidth: 700 }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                  {['ID / Customer', 'Items', 'Total', '📍 Delivery Location', 'Status'].map(h => (
+                    <th key={h} style={{ padding: '13px 15px', textAlign: 'left', color: '#475569', fontWeight: 600 }}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {orders.length === 0 ? (
+                  <tr><td colSpan="5" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>No orders yet.</td></tr>
+                ) : orders.map(order => (
+                  <tr key={order._id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '13px 15px' }}>
+                      <strong style={{ color: '#15803d', fontSize: 13 }}>#{order._id.slice(-6).toUpperCase()}</strong>
+                      <div style={{ fontWeight: 'bold', color: '#1e293b' }}>{order.customerName}</div>
+                      <div style={{ fontSize: 12, color: '#94a3b8' }}>{order.phone}</div>
+                    </td>
+                    <td style={{ padding: '13px 15px', fontSize: 13 }}>
+                      {order.items?.map((item, i) => (
+                        <div key={i} style={{ marginBottom: 2 }}>{item.name} <span style={{ color: '#94a3b8' }}>×{item.quantity}</span></div>
+                      ))}
+                    </td>
+                    <td style={{ padding: '13px 15px', fontWeight: 'bold', color: '#15803d' }}>{fmt(order.totalAmount)}</td>
+                    <td style={{ padding: '13px 15px' }}>
+                      <div style={{ fontSize: 13, color: '#334155', marginBottom: 4 }}>
+                        {order.location || <span style={{ color: '#94a3b8' }}>No address</span>}
+                      </div>
+                      {order.latitude && order.longitude ? (
+                        <>
+                          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>{order.latitude.toFixed(5)}, {order.longitude.toFixed(5)}</div>
+                          <button onClick={() => window.open(`https://www.google.com/maps?q=${order.latitude},${order.longitude}`, '_blank')} style={{ padding: '5px 11px', backgroundColor: '#1d4ed8', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>🗺️ Open Location</button>
+                        </>
+                      ) : (
+                        <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠️ No pin saved</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '13px 15px' }}>
+                      <select value={order.status} onChange={e => handleStatusChange(order._id, e.target.value)}
+                        style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #e2e8f0', fontWeight: 'bold', cursor: 'pointer', fontSize: 13, backgroundColor: order.status === 'Pending' ? '#fef3c7' : order.status === 'Delivered' ? '#dcfce7' : order.status === 'Paid' ? '#dbeafe' : '#f1f5f9', color: order.status === 'Pending' ? '#b45309' : order.status === 'Delivered' ? '#15803d' : order.status === 'Paid' ? '#1d4ed8' : '#334155' }}>
+                        <option value="Pending">⏳ Pending</option>
+                        <option value="Order Received">📬 Order Received</option>
+                        <option value="Payment Confirmed">✅ Payment Confirmed</option>
+                        <option value="Paid">💰 Paid</option>
+                        <option value="Processing Order">⚙️ Processing</option>
+                        <option value="Packed">📦 Packed</option>
+                        <option value="Out for Delivery">🚚 Out for Delivery</option>
+                        <option value="Delivered">🏁 Delivered</option>
+                        <option value="Cancelled">❌ Cancelled</option>
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -514,48 +516,50 @@ const AdminDashboard = () => {
           )}
 
           <div style={{ backgroundColor: 'white', border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-              <thead>
-                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                  {['Product', 'Category', 'Retail', 'Wholesale', 'Stock', 'Actions'].map(h => (
-                    <th key={h} style={{ padding: '13px 15px', textAlign: 'left', color: '#475569', fontWeight: 600 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {products.length === 0 ? (
-                  <tr><td colSpan="6" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>No products yet.</td></tr>
-                ) : products.map(p => (
-                  <tr key={p._id} style={{ borderBottom: '1px solid #f1f5f9', backgroundColor: p.countInStock <= 5 ? '#fffbeb' : 'white' }}>
-                    <td style={{ padding: '12px 15px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        {p.image ? <img src={p.image} alt={p.name} style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8, flexShrink: 0, border: '1px solid #e2e8f0' }} /> : <div style={{ width: 48, height: 48, backgroundColor: '#f1f5f9', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>📦</div>}
-                        <div>
-                          <div style={{ fontWeight: 'bold', color: '#1e293b' }}>{p.name}</div>
-                          <div style={{ fontSize: 12, color: '#94a3b8' }}>{p.brand}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: '12px 15px' }}>
-                      <span style={{ backgroundColor: '#dcfce7', color: '#15803d', padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600 }}>{p.category}</span>
-                    </td>
-                    <td style={{ padding: '12px 15px', fontWeight: 'bold', color: '#15803d' }}>{fmt(p.retailPrice)}</td>
-                    <td style={{ padding: '12px 15px', color: '#64748b' }}>{fmt(p.wholesalePrice)}</td>
-                    <td style={{ padding: '12px 15px' }}>
-                      <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 'bold', backgroundColor: p.countInStock <= 5 ? '#fee2e2' : p.countInStock <= 15 ? '#fef3c7' : '#dcfce7', color: p.countInStock <= 5 ? '#dc2626' : p.countInStock <= 15 ? '#b45309' : '#15803d' }}>
-                        {p.countInStock <= 5 ? '⚠️ ' : ''}{p.countInStock} units
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px 15px' }}>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button onClick={() => startEdit(p)} style={{ padding: '6px 14px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>✏️ Edit</button>
-                        <button onClick={() => handleDelete(p._id, p.name)} style={{ padding: '6px 14px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>🗑️ Delete</button>
-                      </div>
-                    </td>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, minWidth: 700 }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                    {['Product', 'Category', 'Retail', 'Wholesale', 'Stock', 'Actions'].map(h => (
+                      <th key={h} style={{ padding: '13px 15px', textAlign: 'left', color: '#475569', fontWeight: 600 }}>{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {products.length === 0 ? (
+                    <tr><td colSpan="6" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>No products yet.</td></tr>
+                  ) : products.map(p => (
+                    <tr key={p._id} style={{ borderBottom: '1px solid #f1f5f9', backgroundColor: p.countInStock <= 5 ? '#fffbeb' : 'white' }}>
+                      <td style={{ padding: '12px 15px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          {p.image ? <img src={p.image} alt={p.name} style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8, flexShrink: 0, border: '1px solid #e2e8f0' }} /> : <div style={{ width: 48, height: 48, backgroundColor: '#f1f5f9', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>📦</div>}
+                          <div>
+                            <div style={{ fontWeight: 'bold', color: '#1e293b' }}>{p.name}</div>
+                            <div style={{ fontSize: 12, color: '#94a3b8' }}>{p.brand}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '12px 15px' }}>
+                        <span style={{ backgroundColor: '#dcfce7', color: '#15803d', padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600 }}>{p.category}</span>
+                      </td>
+                      <td style={{ padding: '12px 15px', fontWeight: 'bold', color: '#15803d' }}>{fmt(p.retailPrice)}</td>
+                      <td style={{ padding: '12px 15px', color: '#64748b' }}>{fmt(p.wholesalePrice)}</td>
+                      <td style={{ padding: '12px 15px' }}>
+                        <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 'bold', backgroundColor: p.countInStock <= 5 ? '#fee2e2' : p.countInStock <= 15 ? '#fef3c7' : '#dcfce7', color: p.countInStock <= 5 ? '#dc2626' : p.countInStock <= 15 ? '#b45309' : '#15803d' }}>
+                          {p.countInStock <= 5 ? '⚠️ ' : ''}{p.countInStock} units
+                        </span>
+                      </td>
+                      <td style={{ padding: '12px 15px' }}>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button onClick={() => startEdit(p)} style={{ padding: '6px 14px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold', whiteSpace: 'nowrap' }}>✏️ Edit</button>
+                          <button onClick={() => handleDelete(p._id, p.name)} style={{ padding: '6px 14px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold', whiteSpace: 'nowrap' }}>🗑️ Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </>
       )}
