@@ -13,6 +13,7 @@ import TrackOrder from "./pages/TrackOrder";
 import ProductPage from "./pages/ProductPage";
 import CategoriesPage from "./pages/CategoriesPage";
 import AdminDashboard from "./pages/AdminDashboard";
+import OrderManagement from "./pages/OrderManagement";
 import Profile from "./pages/Profile";
 import Wishlist from "./pages/Wishlist";
 
@@ -62,12 +63,12 @@ function AppRoutes() {
         {/* Admin only */}
         <Route element={<ProtectedRoute adminOnly />}>
           <Route path="/admin" element={<AdminDashboard />} />
+          <Route path="/admin/orders" element={<OrderManagement />} />
         </Route>
       </Routes>
 
       {!hiddenPaths.includes(location.pathname) && <BottomNav />}
 
-      {/* PWA Install Prompt — shows on all pages */}
       <InstallPrompt />
     </div>
   );
