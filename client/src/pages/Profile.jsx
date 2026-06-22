@@ -1,9 +1,21 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import API_BASE_URL from '../config';
 import { useAuth } from "../context/AuthContext";
 import "./Profile.css";
+
+// ── Helper: format the real MongoDB createdAt timestamp ──────────────────────
+function formatMemberSince(isoString) {
+  if (!isoString) return 'Unknown';
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return 'Unknown';
+  return date.toLocaleDateString('en-KE', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}
 
 export default function Profile() {
   const navigate = useNavigate();
@@ -13,6 +25,12 @@ export default function Profile() {
   const [activeTab, setActiveTab] = useState("info");
   const [realOrders, setRealOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
+
+  // ── Profile data fetched fresh from the API ────────────────────────────────
+  const [profileData, setProfileData] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState('');
 
   const [personal, setPersonal] = useState({
     firstName: "", lastName: "",
@@ -30,7 +48,6 @@ export default function Profile() {
   });
 
   const [addresses, setAddresses] = useState([]);
-
   const [addressForm, setAddressForm] = useState({ id: '', title: '', line1: '', line2: '', country: 'Kenya', isDefault: false });
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [notificationSaving, setNotificationSaving] = useState(false);
@@ -38,23 +55,97 @@ export default function Profile() {
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '', confirmPassword: '' });
 
-  useEffect(() => {
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('cv-token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  // ── Fetch full profile from API (gets real createdAt) ─────────────────────
+  const fetchProfile = useCallback(async () => {
     if (!user) return;
-    const [firstName = '', ...rest] = (user.name || '').split(' ');
-    const lastName = rest.join(' ');
-    setPersonal(prev => ({ ...prev, firstName: firstName || '', lastName: lastName || '', email: user.email || '', phone: user.phone || '' }));
-    setPersonalDraft(prev => ({ ...prev, firstName: firstName || '', lastName: lastName || '', email: user.email || '', phone: user.phone || '' }));
-    if (user.notificationPreferences) setNotifications(user.notificationPreferences);
+    setProfileLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE_URL}/users/profile`, {
+        headers: getAuthHeaders(),
+      });
+      const data = res.data;
+      setProfileData(data);
+
+      const [firstName = '', ...rest] = (data.name || '').split(' ');
+      const lastName = rest.join(' ');
+      const updated = {
+        firstName: firstName || '',
+        lastName: lastName || '',
+        email: data.email || '',
+        phone: data.phone || '',
+        accountType: data.accountType || 'Retail',
+      };
+      setPersonal(updated);
+      setPersonalDraft(updated);
+
+      if (data.businessInfo) {
+        const bizInfo = {
+          businessName: data.businessInfo.businessName || '',
+          kraPin: data.businessInfo.kraPin || '',
+          bizType: data.businessInfo.bizType || 'Sole Proprietor',
+        };
+        setBiz(bizInfo);
+        setBizDraft(bizInfo);
+      }
+
+      if (data.notificationPreferences) {
+        setNotifications(data.notificationPreferences);
+      }
+
+      // Sync back to AuthContext so the rest of the app is up to date
+      if (updateUser) updateUser(data);
+    } catch (err) {
+      console.warn('Could not fetch profile:', err.message);
+      // Fall back to whatever is in AuthContext
+      if (user) {
+        const [firstName = '', ...rest] = (user.name || '').split(' ');
+        const lastName = rest.join(' ');
+        setPersonal(prev => ({
+          ...prev,
+          firstName,
+          lastName,
+          email: user.email || '',
+          phone: user.phone || '',
+        }));
+        setPersonalDraft(prev => ({
+          ...prev,
+          firstName,
+          lastName,
+          email: user.email || '',
+          phone: user.phone || '',
+        }));
+        if (user.notificationPreferences) setNotifications(user.notificationPreferences);
+      }
+    } finally {
+      setProfileLoading(false);
+    }
   }, [user]);
 
+  // Fetch on mount and whenever user changes
+  useEffect(() => {
+    fetchProfile();
+  }, [fetchProfile]);
+
+  // Poll every 60 seconds for real-time-ish updates
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(fetchProfile, 60000);
+    return () => clearInterval(interval);
+  }, [user, fetchProfile]);
+
+  // ── Orders ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeTab !== 'orders') return;
     const fetchOrders = async () => {
       setOrdersLoading(true);
       try {
-        const token = localStorage.getItem('cv-token');
         const res = await axios.get(`${API_BASE_URL}/orders/my`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: getAuthHeaders(),
         });
         setRealOrders(Array.isArray(res.data) ? res.data : []);
       } catch {
@@ -67,27 +158,71 @@ export default function Profile() {
   }, [activeTab]);
 
   const totalSpent = realOrders.reduce((s, o) => s + (o.totalAmount || 0), 0);
-
-  // Total individual items across all orders (sum of quantities), used in the stats bar
   const totalItemsPurchased = realOrders.reduce((sum, order) => {
     if (!Array.isArray(order.items)) return sum;
     return sum + order.items.reduce((s, item) => s + (Number(item.quantity) || 0), 0);
   }, 0);
 
   const statusColors = {
-    'Delivered':        { background: "#0f3d1a", color: "#4aa85a" },
-    'Processing Order': { background: "#3a2800", color: "#e6a817" },
-    'Processing':       { background: "#3a2800", color: "#e6a817" },
-    'Pending':          { background: "#3a2800", color: "#e6a817" },
-    'Order Received':   { background: "#1a2a4a", color: "#5a9ae6" },
-    'Payment Confirmed':{ background: "#1a2a4a", color: "#5a9ae6" },
-    'Paid':             { background: "#1a2a4a", color: "#5a9ae6" },
-    'Packed':           { background: "#2a1a4a", color: "#9a5ae6" },
-    'Out for Delivery': { background: "#3a2800", color: "#e6a817" },
-    'Cancelled':        { background: "#3a0f0f", color: "#e05a5a" },
+    'Delivered':         { background: "#0f3d1a", color: "#4aa85a" },
+    'Processing Order':  { background: "#3a2800", color: "#e6a817" },
+    'Processing':        { background: "#3a2800", color: "#e6a817" },
+    'Pending':           { background: "#3a2800", color: "#e6a817" },
+    'Order Received':    { background: "#1a2a4a", color: "#5a9ae6" },
+    'Payment Confirmed': { background: "#1a2a4a", color: "#5a9ae6" },
+    'Paid':              { background: "#1a2a4a", color: "#5a9ae6" },
+    'Packed':            { background: "#2a1a4a", color: "#9a5ae6" },
+    'Out for Delivery':  { background: "#3a2800", color: "#e6a817" },
+    'Cancelled':         { background: "#3a0f0f", color: "#e05a5a" },
   };
 
-  const startAddAddress = () => { setAddressForm({ id: Date.now().toString(), title: '', line1: '', line2: '', country: 'Kenya', isDefault: false }); setIsEditingAddress(true); };
+  // ── Save personal info to API ──────────────────────────────────────────────
+  const handleSavePersonal = async () => {
+    setSaveError('');
+    setSaveSuccess('');
+    try {
+      const payload = {
+        name: `${personalDraft.firstName} ${personalDraft.lastName}`.trim(),
+        email: personalDraft.email,
+        phone: personalDraft.phone,
+        accountType: personalDraft.accountType,
+      };
+      const res = await axios.put(`${API_BASE_URL}/users/profile`, payload, {
+        headers: getAuthHeaders(),
+      });
+      setPersonal(personalDraft);
+      setEditingPersonal(false);
+      setSaveSuccess('Profile updated!');
+      if (updateUser) updateUser(res.data);
+      // Re-fetch to make sure everything is in sync
+      setTimeout(fetchProfile, 500);
+      setTimeout(() => setSaveSuccess(''), 3000);
+    } catch (err) {
+      setSaveError(err.response?.data?.message || 'Failed to save. Please try again.');
+    }
+  };
+
+  // ── Save business info to API ──────────────────────────────────────────────
+  const handleSaveBiz = async () => {
+    setSaveError('');
+    try {
+      await axios.put(`${API_BASE_URL}/users/profile`, { businessInfo: bizDraft }, {
+        headers: getAuthHeaders(),
+      });
+      setBiz(bizDraft);
+      setEditingBiz(false);
+      setSaveSuccess('Business info updated!');
+      setTimeout(() => setSaveSuccess(''), 3000);
+    } catch (err) {
+      setSaveError(err.response?.data?.message || 'Failed to save business info.');
+    }
+  };
+
+  // ── Addresses (local state — wire to API if you have an endpoint) ──────────
+  const startAddAddress = () => {
+    setAddressForm({ id: Date.now().toString(), title: '', line1: '', line2: '', country: 'Kenya', isDefault: false });
+    setIsEditingAddress(true);
+  };
   const startEditAddress = (address) => { setAddressForm({ ...address }); setIsEditingAddress(true); };
   const saveAddress = () => {
     setAddresses(prev => {
@@ -99,8 +234,13 @@ export default function Profile() {
     setIsEditingAddress(false);
   };
   const setDefaultAddress = (id) => setAddresses(prev => prev.map(a => ({ ...a, isDefault: a.id === id })));
-  const removeAddress = (id) => setAddresses(prev => { const next = prev.filter(a => a.id !== id); if (!next.some(a => a.isDefault) && next.length > 0) next[0].isDefault = true; return next; });
+  const removeAddress = (id) => setAddresses(prev => {
+    const next = prev.filter(a => a.id !== id);
+    if (!next.some(a => a.isDefault) && next.length > 0) next[0].isDefault = true;
+    return next;
+  });
 
+  // ── Notification prefs ─────────────────────────────────────────────────────
   const handleNotificationToggle = async (key) => {
     const nextValue = !notifications[key];
     const nextPrefs = { ...notifications, [key]: nextValue };
@@ -108,8 +248,9 @@ export default function Profile() {
     setNotificationSaving(true);
     setSettingsMessage('Saving...');
     try {
-      const token = localStorage.getItem('cv-token');
-      await axios.put(`${API_BASE_URL}/users/notifications`, nextPrefs, { headers: { Authorization: `Bearer ${token}` } });
+      await axios.put(`${API_BASE_URL}/users/notifications`, nextPrefs, {
+        headers: getAuthHeaders(),
+      });
       setSettingsMessage(`${key.replace(/([A-Z])/g, ' $1')} ${nextValue ? 'enabled' : 'disabled'}.`);
       if (updateUser) updateUser({ notificationPreferences: nextPrefs });
     } catch {
@@ -122,13 +263,30 @@ export default function Profile() {
   };
 
   const handleSignOut = () => { logout(); navigate('/login'); };
-  const handleDeleteAccount = () => { if (window.confirm('Delete account? This cannot be undone.')) { logout(); navigate('/login'); } };
-  const handleTogglePasswordForm = () => { setShowPasswordForm(c => !c); setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' }); };
-  const handleUpdatePassword = () => {
-    if (!passwordForm.oldPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) { alert('Fill in all fields.'); return; }
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) { alert('Passwords do not match.'); return; }
-    alert('Password updated!');
-    setShowPasswordForm(false);
+  const handleDeleteAccount = () => {
+    if (window.confirm('Delete account? This cannot be undone.')) { logout(); navigate('/login'); }
+  };
+  const handleTogglePasswordForm = () => {
+    setShowPasswordForm(c => !c);
+    setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' });
+  };
+  const handleUpdatePassword = async () => {
+    if (!passwordForm.oldPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      alert('Fill in all fields.'); return;
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      alert('Passwords do not match.'); return;
+    }
+    try {
+      await axios.put(`${API_BASE_URL}/users/change-password`, {
+        oldPassword: passwordForm.oldPassword,
+        newPassword: passwordForm.newPassword,
+      }, { headers: getAuthHeaders() });
+      alert('Password updated!');
+      setShowPasswordForm(false);
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to update password.');
+    }
   };
 
   function Toggle({ on, onToggle }) {
@@ -143,7 +301,11 @@ export default function Profile() {
     );
   }
 
-  const initials = `${personal.firstName?.[0] || ''}${personal.lastName?.[0] || ''}`.toUpperCase() || user?.name?.[0]?.toUpperCase() || '?';
+  const initials = `${personal.firstName?.[0] || ''}${personal.lastName?.[0] || ''}`.toUpperCase()
+    || user?.name?.[0]?.toUpperCase() || '?';
+
+  // ── Real createdAt from the API response ───────────────────────────────────
+  const memberSince = formatMemberSince(profileData?.createdAt || user?.createdAt);
 
   return (
     <div className="profile-page">
@@ -155,11 +317,14 @@ export default function Profile() {
           <div className="profile-name-block">
             <div className="profile-name">
               <span className="profile-name-text">
-                {user?.name || `${personal.firstName} ${personal.lastName}`.trim() || 'User'}
+                {profileData?.name || user?.name || `${personal.firstName} ${personal.lastName}`.trim() || 'User'}
               </span>
               <span className="account-badge">{personal.accountType}</span>
             </div>
-            <div className="profile-meta">📍 Nairobi, Kenya · Member since Jan 2024</div>
+            {/* ✅ FIXED: real createdAt from DB, not hardcoded */}
+            <div className="profile-meta">
+              📍 Nairobi, Kenya · Member since {profileLoading ? '…' : memberSince}
+            </div>
             <div className="profile-verified">✅ Verified account</div>
           </div>
         </div>
@@ -200,13 +365,31 @@ export default function Profile() {
 
       <div className="profile-content">
 
+        {/* Global save feedback */}
+        {saveSuccess && (
+          <div style={{
+            background: '#0f3d1a', border: '1px solid #1d6b2a', color: '#4aa85a',
+            padding: '10px 16px', borderRadius: 8, marginBottom: 12, fontSize: 14,
+          }}>
+            ✅ {saveSuccess}
+          </div>
+        )}
+        {saveError && (
+          <div style={{
+            background: '#3a0f0f', border: '1px solid #7a2020', color: '#e05a5a',
+            padding: '10px 16px', borderRadius: 8, marginBottom: 12, fontSize: 14,
+          }}>
+            ❌ {saveError}
+          </div>
+        )}
+
         {/* PROFILE TAB */}
         {activeTab === "info" && (
           <>
             <div className="profile-card">
               <div className="profile-card-header">
                 <span className="profile-card-title">👤 Personal Info</span>
-                <button className="btn-outline" onClick={() => { setPersonalDraft({ ...personal }); setEditingPersonal(true); }}>Edit</button>
+                <button className="btn-outline" onClick={() => { setPersonalDraft({ ...personal }); setEditingPersonal(true); setSaveError(''); }}>Edit</button>
               </div>
               {!editingPersonal ? (
                 <>
@@ -229,6 +412,13 @@ export default function Profile() {
                         <div className="field-value">{val || '—'}</div>
                       </div>
                     ))}
+                  </div>
+                  {/* ✅ Show real account creation date */}
+                  <div className="field" style={{ marginTop: 10 }}>
+                    <label className="field-label">Account created</label>
+                    <div className="field-value">
+                      {profileLoading ? 'Loading…' : memberSince}
+                    </div>
                   </div>
                 </>
               ) : (
@@ -261,8 +451,9 @@ export default function Profile() {
                     </div>
                   </div>
                   <div className="field-actions">
-                    <button className="btn-cancel" onClick={() => setEditingPersonal(false)}>Cancel</button>
-                    <button className="btn-save" onClick={() => { setPersonal(personalDraft); setEditingPersonal(false); }}>Save changes</button>
+                    <button className="btn-cancel" onClick={() => { setEditingPersonal(false); setSaveError(''); }}>Cancel</button>
+                    {/* ✅ FIXED: now saves to API */}
+                    <button className="btn-save" onClick={handleSavePersonal}>Save changes</button>
                   </div>
                 </>
               )}
@@ -310,7 +501,8 @@ export default function Profile() {
                   </div>
                   <div className="field-actions">
                     <button className="btn-cancel" onClick={() => setEditingBiz(false)}>Cancel</button>
-                    <button className="btn-save" onClick={() => { setBiz(bizDraft); setEditingBiz(false); }}>Save changes</button>
+                    {/* ✅ FIXED: now saves to API */}
+                    <button className="btn-save" onClick={handleSaveBiz}>Save changes</button>
                   </div>
                 </>
               )}
@@ -343,7 +535,7 @@ export default function Profile() {
                         <> — {items.map(i => `${i.name} ×${i.quantity}`).join(', ')}</>
                       )}
                     </div>
-                    <div className="order-date">{new Date(order.createdAt).toLocaleDateString()}</div>
+                    <div className="order-date">{new Date(order.createdAt).toLocaleDateString('en-KE')}</div>
                   </div>
                   <div className="order-side">
                     <div className="order-amount">KSh {order.totalAmount?.toLocaleString()}</div>
