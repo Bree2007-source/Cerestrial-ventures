@@ -18,6 +18,7 @@ import couponRoutes from './routes/couponRoutes.js'
 import uploadRoutes from './routes/uploadRoutes.js'
 import paymentRoutes from './routes/payment.js'
 import notificationRoutes from './routes/notificationRoutes.js'
+import passwordResetRoutes from './routes/passwordResetRoutes.js'
 import User from './models/User.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -78,6 +79,7 @@ app.use('/api/coupons', couponRoutes)
 app.use('/api/upload', uploadRoutes)
 app.use('/api/payments', paymentRoutes)
 app.use('/api/notifications', notificationRoutes)
+app.use('/api/password-reset', passwordResetRoutes)
 
 // Global Error Handler
 app.use((err, req, res, next) => {
