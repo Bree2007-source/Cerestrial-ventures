@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useLocation } from "react-router-dom";
-import API_BASE_URL from "../config";
+import { io } from "socket.io-client";
+import API_BASE_URL, { API_HOST } from "../config";
+
+const socket = io(API_HOST);
 
 const TrackOrder = () => {
   const location = useLocation();
@@ -21,6 +24,11 @@ const TrackOrder = () => {
   ];
 
   useEffect(() => {
+    if (!orderId) {
+      setLoading(false);
+      return;
+    }
+
     const fetchOrderStatus = async () => {
       try {
         const response = await fetch(`${API_BASE_URL}/orders/${orderId}`);
@@ -28,18 +36,33 @@ const TrackOrder = () => {
         const data = await response.json();
         setOrder(data);
       } catch (err) {
+        console.error('[TrackOrder] fetch error:', err);
         setError(err.message);
       } finally {
         setLoading(false);
       }
     };
 
-    if (orderId) {
-      fetchOrderStatus();
-      // Polls every 30 seconds to update the status dynamically for your demo
-      const interval = setInterval(fetchOrderStatus, 30000);
-      return () => clearInterval(interval);
-    }
+    fetchOrderStatus();
+
+    // Join this order's room so the server can push status changes to us instantly.
+    socket.emit('join_order', orderId);
+
+    const handleStatusUpdate = ({ orderId: updatedId, status }) => {
+      if (updatedId === orderId || updatedId?.toString() === orderId) {
+        console.log('[TrackOrder] live status update:', status);
+        setOrder(prev => (prev ? { ...prev, status } : prev));
+      }
+    };
+    socket.on('order_status_update', handleStatusUpdate);
+
+    // Slow poll kept only as a fallback in case the socket connection drops.
+    const interval = setInterval(fetchOrderStatus, 60000);
+
+    return () => {
+      socket.off('order_status_update', handleStatusUpdate);
+      clearInterval(interval);
+    };
   }, [orderId]);
 
   if (loading) return <div className="text-center p-6 text-gray-600">Loading order details...</div>;
@@ -59,8 +82,8 @@ const TrackOrder = () => {
       <div className="relative flex items-center justify-between w-full mb-8 px-2">
         {/* Background Track Line */}
         <div className="absolute left-6 right-6 top-4 h-1 bg-gray-200 z-0">
-          <div 
-            className="h-full bg-green-500 transition-all duration-500" 
+          <div
+            className="h-full bg-green-500 transition-all duration-500"
             style={{ width: `${(Math.max(0, currentStatusIndex) / (statuses.length - 1)) * 100}%` }}
           ></div>
         </div>
@@ -85,7 +108,7 @@ const TrackOrder = () => {
       {/* Dynamic Summary Panel */}
       <div className="border-t border-gray-100 pt-4 mt-6 space-y-2">
         <h3 className="font-semibold text-gray-700 mb-2">Delivery Details</h3>
-        <p className="text-sm text-gray-600"><span className="font-medium text-gray-800">Items:</span> {order.itemsCount || 0} products</p>
+        <p className="text-sm text-gray-600"><span className="font-medium text-gray-800">Items:</span> {order.itemsCount ?? order.items?.length ?? 0} products</p>
         <p className="text-sm text-gray-600"><span className="font-medium text-gray-800">Total Amount:</span> KSh {order.totalAmount}</p>
         <p className="text-sm text-gray-600"><span className="font-medium text-gray-800">Est. Delivery:</span> {order.deliveryTime || "Same-day Delivery"}</p>
       </div>

@@ -23,12 +23,22 @@ const Checkout = () => {
   const pinnedLatLngRef = useRef(null);
 
   useEffect(() => {
+    const raw = localStorage.getItem('cv-user') || localStorage.getItem('user');
+    try {
+      const user = raw ? JSON.parse(raw) : null;
+      if (user) {
+        if (user.name || user.fullName) setCustomerName(user.name || user.fullName);
+        if (user.phone) setPhone(user.phone);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
     pinnedLatLngRef.current = pinnedLatLng;
   }, [pinnedLatLng]);
 
   useEffect(() => {
     if (!mapVisible) return;
-
     if (!document.getElementById('leaflet-css')) {
       const link = document.createElement('link');
       link.id = 'leaflet-css';
@@ -36,19 +46,16 @@ const Checkout = () => {
       link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
       document.head.appendChild(link);
     }
-
     const initMap = () => {
       if (mapInitialized.current) return;
       const L = window.L;
       if (!L) return;
-
       mapInitialized.current = true;
       const map = L.map('checkout-map').setView([-0.3031, 36.0800], 14);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors'
       }).addTo(map);
       mapInstanceRef.current = map;
-
       map.on('click', (e) => {
         const { lat, lng } = e.latlng;
         if (markerRef.current) {
@@ -64,7 +71,6 @@ const Checkout = () => {
         setPinnedLatLng({ lat, lng });
       });
     };
-
     if (!window.L) {
       if (!document.getElementById('leaflet-js')) {
         const script = document.createElement('script');
@@ -80,9 +86,7 @@ const Checkout = () => {
 
   const reverseGeocode = async (lat, lng) => {
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`
-      );
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
       const data = await res.json();
       return data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     } catch {
@@ -91,10 +95,7 @@ const Checkout = () => {
   };
 
   const handleUseCurrentLocation = () => {
-    if (!navigator.geolocation) {
-      alert('Geolocation is not supported by your browser.');
-      return;
-    }
+    if (!navigator.geolocation) { alert('Geolocation not supported.'); return; }
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const lat = pos.coords.latitude;
@@ -105,16 +106,13 @@ const Checkout = () => {
         setLocationConfirmed(true);
         setMapVisible(false);
       },
-      () => alert('Unable to get your location. Please pin it on the map instead.')
+      () => alert('Unable to get location. Please pin it on the map.')
     );
   };
 
   const handleConfirmPin = async () => {
     const current = pinnedLatLngRef.current;
-    if (!current) {
-      alert('Please tap on the map to drop a pin first.');
-      return;
-    }
+    if (!current) { alert('Please tap on the map to drop a pin first.'); return; }
     const address = await reverseGeocode(current.lat, current.lng);
     setLocation(address);
     setLocationConfirmed(true);
@@ -128,10 +126,7 @@ const Checkout = () => {
     mapInitialized.current = false;
     markerRef.current = null;
     pinnedLatLngRef.current = null;
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
-    }
+    if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
   };
 
   const formatPhone = (raw) => {
@@ -147,7 +142,7 @@ const Checkout = () => {
   const itemsToOrder = cartItems.map(item => ({
     name: item.name,
     quantity: getItemQuantity(item),
-    price: getItemPrice(item)
+    price: getItemPrice(item),
   }));
 
   const totalAmount = itemsToOrder.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -161,13 +156,11 @@ const Checkout = () => {
       setLoading(false);
       return;
     }
-
     if (!locationConfirmed || !pinnedLatLngRef.current) {
       alert('Please select your delivery location before placing your order.');
       setLoading(false);
       return;
     }
-
     if (cartItems.length === 0) {
       alert('Your cart is empty');
       setLoading(false);
@@ -177,6 +170,7 @@ const Checkout = () => {
     const formattedPhone = formatPhone(phone);
     const coords = pinnedLatLngRef.current;
 
+    // ── orderPayload defined first ──────────────────────────────
     const orderPayload = {
       customerName,
       phone: formattedPhone,
@@ -190,10 +184,15 @@ const Checkout = () => {
       status: 'Order Received',
     };
 
+    // ── saveOrder defined AFTER orderPayload so it can access it ─
     const saveOrder = async (extra = {}) => {
+      const token = localStorage.getItem('cv-token') || localStorage.getItem('token');
       const response = await fetch(`${API_BASE_URL}/orders`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
         body: JSON.stringify({ ...orderPayload, ...extra }),
       });
       const data = await response.json();
@@ -213,6 +212,7 @@ const Checkout = () => {
           alert(data.message || '❌ Failed to save order. Please try again.');
         }
       } catch (err) {
+        console.error('Cash order error:', err);
         alert('❌ Cannot connect to server. Make sure backend is running.');
       } finally {
         setLoading(false);
@@ -220,6 +220,7 @@ const Checkout = () => {
       return;
     }
 
+    // M-Pesa flow
     try {
       const paymentRes = await fetch(`${API_BASE_URL}/payments/stk`, {
         method: 'POST',
@@ -253,7 +254,7 @@ const Checkout = () => {
         const { response, data } = await saveOrder();
         if (response.ok) {
           clearCart();
-          alert('⚠️ Unable to reach M-Pesa server, but order was saved. Confirm payment with us.');
+          alert('⚠️ Unable to reach M-Pesa, but order was saved. Confirm payment with us.');
           navigate(orderUrl(data._id));
         } else {
           alert(data.message || '❌ Unable to save order. Please try again later.');
@@ -271,10 +272,8 @@ const Checkout = () => {
       <div style={{ padding: '40px', textAlign: 'center', fontFamily: 'sans-serif' }}>
         <div style={{ fontSize: '60px', marginBottom: '20px' }}>🛒</div>
         <h3>Your shopping cart is empty.</h3>
-        <button
-          onClick={() => navigate('/')}
-          style={{ marginTop: '20px', padding: '12px 24px', backgroundColor: '#15803d', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px' }}
-        >
+        <button onClick={() => navigate('/')}
+          style={{ marginTop: '20px', padding: '12px 24px', backgroundColor: '#15803d', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px' }}>
           ← Continue Shopping
         </button>
       </div>
@@ -295,50 +294,29 @@ const Checkout = () => {
 
           <div style={{ marginBottom: '15px' }}>
             <label style={labelStyle}>Your Full Name *</label>
-            <input
-              type="text" value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              required placeholder="e.g., Brenda Kathure" style={inputStyle}
-            />
+            <input type="text" value={customerName} onChange={(e) => setCustomerName(e.target.value)}
+              required placeholder="e.g., Brenda Kathure" style={inputStyle} />
           </div>
 
           <div style={{ marginBottom: '15px' }}>
             <label style={labelStyle}>Phone Number *</label>
-            <input
-              type="tel" value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              required placeholder="e.g., 0712345678" style={inputStyle}
-            />
-            <small style={{ color: '#64748b', fontSize: '11px' }}>
-              Used for M-Pesa payment and delivery updates
-            </small>
+            <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+              required placeholder="e.g., 0712345678" style={inputStyle} />
+            <small style={{ color: '#64748b', fontSize: '11px' }}>Used for M-Pesa payment and delivery updates</small>
           </div>
 
           {/* Delivery Location */}
           <div style={{ marginBottom: '20px' }}>
             <label style={labelStyle}>Delivery Location *</label>
-
             {!locationConfirmed ? (
               <>
                 <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
-                  <button
-                    type="button" onClick={handleUseCurrentLocation}
-                    style={{
-                      flex: 1, padding: '10px', borderRadius: '8px',
-                      border: '2px solid #15803d', backgroundColor: '#dcfce7',
-                      color: '#15803d', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px'
-                    }}
-                  >
+                  <button type="button" onClick={handleUseCurrentLocation}
+                    style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '2px solid #15803d', backgroundColor: '#dcfce7', color: '#15803d', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px' }}>
                     📍 Use Current Location
                   </button>
-                  <button
-                    type="button" onClick={() => setMapVisible(true)}
-                    style={{
-                      flex: 1, padding: '10px', borderRadius: '8px',
-                      border: '2px solid #1d4ed8', backgroundColor: '#dbeafe',
-                      color: '#1d4ed8', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px'
-                    }}
-                  >
+                  <button type="button" onClick={() => setMapVisible(true)}
+                    style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '2px solid #1d4ed8', backgroundColor: '#dbeafe', color: '#1d4ed8', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px' }}>
                     🗺️ Pin on Map
                   </button>
                 </div>
@@ -347,34 +325,20 @@ const Checkout = () => {
                 </p>
               </>
             ) : (
-              <div style={{
-                marginTop: '8px', padding: '10px 14px', borderRadius: '8px',
-                border: '2px solid #15803d', backgroundColor: '#dcfce7',
-                display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px'
-              }}>
-                <span style={{ fontSize: '13px', color: '#166534', flex: 1 }}>
-                  📍 {location}
-                </span>
-                <button
-                  type="button" onClick={resetLocation}
-                  style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', flexShrink: 0 }}
-                >
+              <div style={{ marginTop: '8px', padding: '10px 14px', borderRadius: '8px', border: '2px solid #15803d', backgroundColor: '#dcfce7', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                <span style={{ fontSize: '13px', color: '#166534', flex: 1 }}>📍 {location}</span>
+                <button type="button" onClick={resetLocation}
+                  style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', flexShrink: 0 }}>
                   ✕ Change
                 </button>
               </div>
             )}
 
-            {/* Map Modal */}
             {mapVisible && (
-              <div style={{
-                position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)',
-                zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center'
-              }}>
+              <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '20px', width: '90%', maxWidth: '600px' }}>
                   <h3 style={{ marginTop: 0, color: '#1e293b' }}>📍 Pin Your Delivery Location</h3>
-                  <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '10px' }}>
-                    Tap anywhere on the map to drop a pin. You can drag it to adjust.
-                  </p>
+                  <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '10px' }}>Tap anywhere on the map to drop a pin. You can drag it to adjust.</p>
                   <div id="checkout-map" style={{ height: '350px', borderRadius: '8px', border: '1px solid #e2e8f0' }} />
                   {pinnedLatLng && (
                     <p style={{ fontSize: '12px', color: '#15803d', marginTop: '8px' }}>
@@ -382,33 +346,17 @@ const Checkout = () => {
                     </p>
                   )}
                   <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
-                    <button
-                      type="button" onClick={handleConfirmPin}
-                      style={{
-                        flex: 1, padding: '12px', backgroundColor: '#15803d', color: 'white',
-                        border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer'
-                      }}
-                    >
+                    <button type="button" onClick={handleConfirmPin}
+                      style={{ flex: 1, padding: '12px', backgroundColor: '#15803d', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
                       ✅ Confirm This Location
                     </button>
-                    <button
-                      type="button"
+                    <button type="button"
                       onClick={() => {
-                        setMapVisible(false);
-                        setPinnedLatLng(null);
-                        mapInitialized.current = false;
-                        markerRef.current = null;
-                        pinnedLatLngRef.current = null;
-                        if (mapInstanceRef.current) {
-                          mapInstanceRef.current.remove();
-                          mapInstanceRef.current = null;
-                        }
+                        setMapVisible(false); setPinnedLatLng(null);
+                        mapInitialized.current = false; markerRef.current = null; pinnedLatLngRef.current = null;
+                        if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null; }
                       }}
-                      style={{
-                        flex: 1, padding: '12px', backgroundColor: '#f1f5f9', color: '#334155',
-                        border: '1px solid #cbd5e1', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer'
-                      }}
-                    >
+                      style={{ flex: 1, padding: '12px', backgroundColor: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
                       Cancel
                     </button>
                   </div>
@@ -422,16 +370,8 @@ const Checkout = () => {
             <label style={labelStyle}>Delivery Time</label>
             <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
               {['Today', 'Tomorrow'].map((option) => (
-                <button
-                  key={option} type="button" onClick={() => setDeliveryTime(option)}
-                  style={{
-                    flex: 1, padding: '12px', borderRadius: '10px',
-                    border: `2px solid ${deliveryTime === option ? '#15803d' : '#e2e8f0'}`,
-                    backgroundColor: deliveryTime === option ? '#dcfce7' : 'white',
-                    color: deliveryTime === option ? '#15803d' : '#64748b',
-                    fontWeight: 'bold', cursor: 'pointer', fontSize: '14px', transition: 'all 0.2s',
-                  }}
-                >
+                <button key={option} type="button" onClick={() => setDeliveryTime(option)}
+                  style={{ flex: 1, padding: '12px', borderRadius: '10px', border: `2px solid ${deliveryTime === option ? '#15803d' : '#e2e8f0'}`, backgroundColor: deliveryTime === option ? '#dcfce7' : 'white', color: deliveryTime === option ? '#15803d' : '#64748b', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px', transition: 'all 0.2s' }}>
                   {option === 'Today' ? '⚡ Today' : '📅 Tomorrow'}
                 </button>
               ))}
@@ -446,25 +386,10 @@ const Checkout = () => {
                 { id: 'M-Pesa', label: '📱 M-Pesa', desc: 'Pay via M-Pesa STK Push' },
                 { id: 'Cash', label: '💵 Cash on Delivery', desc: 'Pay when goods arrive' },
               ].map((method) => (
-                <div
-                  key={method.id} onClick={() => setPaymentMethod(method.id)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '12px', padding: '14px',
-                    borderRadius: '10px',
-                    border: `2px solid ${paymentMethod === method.id ? '#15803d' : '#e2e8f0'}`,
-                    backgroundColor: paymentMethod === method.id ? '#dcfce7' : 'white',
-                    cursor: 'pointer', transition: 'all 0.2s',
-                  }}
-                >
-                  <div style={{
-                    width: '20px', height: '20px', borderRadius: '50%',
-                    border: `2px solid ${paymentMethod === method.id ? '#15803d' : '#cbd5e1'}`,
-                    backgroundColor: paymentMethod === method.id ? '#15803d' : 'white',
-                    flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    {paymentMethod === method.id && (
-                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'white' }} />
-                    )}
+                <div key={method.id} onClick={() => setPaymentMethod(method.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px', borderRadius: '10px', border: `2px solid ${paymentMethod === method.id ? '#15803d' : '#e2e8f0'}`, backgroundColor: paymentMethod === method.id ? '#dcfce7' : 'white', cursor: 'pointer', transition: 'all 0.2s' }}>
+                  <div style={{ width: '20px', height: '20px', borderRadius: '50%', border: `2px solid ${paymentMethod === method.id ? '#15803d' : '#cbd5e1'}`, backgroundColor: paymentMethod === method.id ? '#15803d' : 'white', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {paymentMethod === method.id && <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'white' }} />}
                   </div>
                   <div>
                     <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#1e293b' }}>{method.label}</div>
@@ -475,27 +400,15 @@ const Checkout = () => {
             </div>
           </div>
 
-          <button
-            type="submit" disabled={loading}
-            style={{
-              backgroundColor: loading ? '#86efac' : '#15803d',
-              color: 'white', border: 'none', padding: '14px', borderRadius: '8px',
-              fontWeight: 'bold', fontSize: '16px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              width: '100%', transition: 'background 0.2s',
-            }}
-          >
-            {loading
-              ? '🔄 Processing...'
-              : paymentMethod === 'M-Pesa'
+          <button type="submit" disabled={loading}
+            style={{ backgroundColor: loading ? '#86efac' : '#15803d', color: 'white', border: 'none', padding: '14px', borderRadius: '8px', fontWeight: 'bold', fontSize: '16px', cursor: loading ? 'not-allowed' : 'pointer', width: '100%', transition: 'background 0.2s' }}>
+            {loading ? '🔄 Processing...' : paymentMethod === 'M-Pesa'
               ? `📞 Pay KSh ${totalAmount.toLocaleString()} via M-Pesa`
               : `✅ Place Order — KSh ${totalAmount.toLocaleString()} (Cash)`}
           </button>
 
           <p style={{ textAlign: 'center', fontSize: '12px', color: '#94a3b8', marginTop: '10px' }}>
-            {paymentMethod === 'M-Pesa'
-              ? '💳 You will receive an M-Pesa prompt on your phone'
-              : '🚚 Pay cash when your order is delivered'}
+            {paymentMethod === 'M-Pesa' ? '💳 You will receive an M-Pesa prompt on your phone' : '🚚 Pay cash when your order is delivered'}
           </p>
         </form>
 
@@ -528,9 +441,7 @@ const Checkout = () => {
           <div style={{ borderTop: '2px solid #15803d', paddingTop: '15px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontWeight: 'bold', fontSize: '16px' }}>Grand Total:</span>
-              <strong style={{ fontSize: '26px', color: '#15803d' }}>
-                KSh {totalAmount.toLocaleString()}
-              </strong>
+              <strong style={{ fontSize: '26px', color: '#15803d' }}>KSh {totalAmount.toLocaleString()}</strong>
             </div>
           </div>
         </div>

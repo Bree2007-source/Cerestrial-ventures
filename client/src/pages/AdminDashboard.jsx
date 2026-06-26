@@ -1,568 +1,992 @@
-import React, { useState, useEffect, useRef } from 'react';
+/**
+ * Cerestrial Ventures — Admin Dashboard
+ * Full replacement for the existing AdminDashboard.jsx
+ *
+ * Features:
+ *  - Overview with real KPIs + charts
+ *  - Orders management with full status workflow + search/filter
+ *  - Inventory with add/edit/delete + low-stock alerts
+ *  - Product Sales Summary (daily/weekly/monthly/custom)
+ *  - Customers list
+ *  - Promotions broadcast
+ *  - Real-time polling (upgradeable to WebSocket)
+ *  - Fully responsive — mobile first, no horizontal scroll
+ */
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API_BASE_URL from '../config';
 
-const fmt = (n) => `KSh ${Number(n || 0).toLocaleString()}`;
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const fmt    = (n) => `KSh ${Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 0 })}`;
+const fmtNum = (n) => Number(n || 0).toLocaleString('en-KE');
+const pct    = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 
-const inp = {
-  width: '100%', padding: '10px', borderRadius: '6px',
-  border: '1px solid #cbd5e1', boxSizing: 'border-box',
-  fontSize: '14px', backgroundColor: 'white', fontFamily: 'sans-serif',
-};
-const lbl = {
-  display: 'block', fontSize: '12px', fontWeight: '600',
-  marginBottom: '5px', color: '#475569',
+const STATUS_META = {
+  'Pending':            { color: '#f59e0b', bg: '#fef3c7', label: 'Pending' },
+  'Order Received':     { color: '#3b82f6', bg: '#dbeafe', label: 'Received' },
+  'Payment Confirmed':  { color: '#8b5cf6', bg: '#ede9fe', label: 'Paid ✓' },
+  'Paid':               { color: '#8b5cf6', bg: '#ede9fe', label: 'Paid' },
+  'Processing Order':   { color: '#f97316', bg: '#ffedd5', label: 'Processing' },
+  'Packed':             { color: '#0891b2', bg: '#cffafe', label: 'Packed' },
+  'Out for Delivery':   { color: '#1d4ed8', bg: '#dbeafe', label: 'On the Way' },
+  'Delivered':          { color: '#16a34a', bg: '#dcfce7', label: 'Delivered' },
+  'Cancelled':          { color: '#dc2626', bg: '#fee2e2', label: 'Cancelled' },
 };
 
-const StatCard = ({ label, value, sub, accent, icon }) => (
-  <div style={{
-    background: 'white', borderRadius: '10px',
-    border: '1px solid #e2e8f0', padding: '16px 18px',
-    position: 'relative', overflow: 'hidden', minWidth: 0,
-  }}>
-    <div style={{ position: 'absolute', top: 0, left: 0, width: 4, height: '100%', background: accent }} />
-    <div style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', fontSize: 26, opacity: 0.1 }}>{icon}</div>
-    <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-    <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>{value}</div>
-    {sub && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>{sub}</div>}
+const ALL_STATUSES = Object.keys(STATUS_META);
+
+const getStatusStyle = (status) => {
+  const m = STATUS_META[status] || { color: '#64748b', bg: '#f1f5f9', label: status };
+  return { backgroundColor: m.bg, color: m.color, padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', display: 'inline-block' };
+};
+
+const getToken  = ()      => localStorage.getItem('cv-token') || '';
+const authHdr   = ()      => ({ Authorization: `Bearer ${getToken()}` });
+const jsonHdr   = ()      => ({ 'Content-Type': 'application/json', ...authHdr() });
+
+const today     = ()      => new Date().toISOString().split('T')[0];
+const nDaysAgo  = (n)     => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().split('T')[0]; };
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+/** Stat card with coloured left bar */
+const KPICard = ({ label, value, sub, color, icon, onClick }) => (
+  <div
+    onClick={onClick}
+    style={{
+      background: 'white', borderRadius: 12, border: '1px solid #e2e8f0',
+      padding: '16px 18px', position: 'relative', overflow: 'hidden',
+      cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .15s',
+      minWidth: 0,
+    }}
+    onMouseEnter={e => { if (onClick) e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,.08)'; }}
+    onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; }}
+  >
+    <div style={{ position: 'absolute', top: 0, left: 0, width: 4, height: '100%', background: color, borderRadius: '12px 0 0 12px' }} />
+    <div style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', fontSize: 28, opacity: 0.08 }}>{icon}</div>
+    <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 4 }}>{label}</div>
+    <div style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', lineHeight: 1.2 }}>{value}</div>
+    {sub && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{sub}</div>}
   </div>
 );
 
-const SimpleBarChart = ({ data, labels, color, formatter }) => {
+/** Mini inline bar chart — pure CSS, no lib */
+const BarChart = ({ data = [], labels = [], color, formatter }) => {
   const max = Math.max(...data, 1);
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 180, padding: '10px 0' }}>
-      {data.map((val, i) => (
-        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
-          <div style={{ fontSize: 9, color: '#94a3b8' }}>{formatter ? formatter(val) : val}</div>
-          <div style={{ width: '100%', backgroundColor: color, borderRadius: '4px 4px 0 0', height: `${(val / max) * 140}px`, minHeight: val > 0 ? 4 : 0, transition: 'height 0.3s' }} />
-          <div style={{ fontSize: 9, color: '#94a3b8', textAlign: 'center' }}>{labels[i]}</div>
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 160, paddingBottom: 24, position: 'relative' }}>
+      {data.map((v, i) => (
+        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, height: '100%', justifyContent: 'flex-end' }}>
+          <span style={{ fontSize: 9, color: '#94a3b8', textAlign: 'center', lineHeight: 1.2 }}>
+            {formatter ? formatter(v) : fmtNum(v)}
+          </span>
+          <div style={{
+            width: '100%', background: color, borderRadius: '3px 3px 0 0',
+            height: `${Math.round((v / max) * 120)}px`, minHeight: v > 0 ? 3 : 0,
+            transition: 'height .4s ease',
+          }} />
+          <span style={{ fontSize: 9, color: '#94a3b8', textAlign: 'center', position: 'absolute', bottom: 0 }}>{labels[i]}</span>
         </div>
       ))}
     </div>
   );
 };
 
+/** Status badge pill */
+const Badge = ({ status }) => <span style={getStatusStyle(status)}>{STATUS_META[status]?.label || status}</span>;
+
+/** Small spinner */
+const Spinner = ({ size = 20 }) => (
+  <div style={{
+    width: size, height: size, border: `2px solid #e2e8f0`,
+    borderTop: `2px solid #166534`, borderRadius: '50%',
+    animation: 'spin .7s linear infinite', display: 'inline-block',
+  }} />
+);
+
+/** Toast notification */
+const Toast = ({ msg, type = 'success', onClose }) => {
+  const bg = type === 'error' ? '#fee2e2' : type === 'warning' ? '#fef3c7' : '#dcfce7';
+  const cl = type === 'error' ? '#991b1b' : type === 'warning' ? '#92400e' : '#166534';
+  return (
+    <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, background: bg, color: cl, border: `1px solid ${cl}33`, borderRadius: 10, padding: '14px 20px', minWidth: 260, maxWidth: 360, boxShadow: '0 8px 24px rgba(0,0,0,.12)', display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 14 }}>
+      <span style={{ flexShrink: 0 }}>{type === 'error' ? '❌' : type === 'warning' ? '⚠️' : '✅'}</span>
+      <span style={{ flex: 1 }}>{msg}</span>
+      <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: cl, fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+    </div>
+  );
+};
+
+// Input / label style helpers
+const iStyle = {
+  width: '100%', padding: '9px 12px', borderRadius: 8,
+  border: '1px solid #cbd5e1', fontSize: 14, boxSizing: 'border-box',
+  outline: 'none', fontFamily: 'inherit', color: '#1e293b', background: 'white',
+};
+const lStyle = { display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 5 };
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 const AdminDashboard = () => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('overview');
-  const [orders, setOrders] = useState([]);
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  const [tab, setTab]         = useState('overview');
+  const [orders, setOrders]   = useState([]);
   const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [customers, setCustomers] = useState([]);
   const [analytics, setAnalytics] = useState(null);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [editingProduct, setEditingProduct] = useState(null);
-  const [imageFile, setImageFile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast]     = useState(null);
+
+  // Orders tab state
+  const [orderSearch, setOrderSearch]   = useState('');
+  const [orderStatus, setOrderStatus]   = useState('');
+  const [orderDate, setOrderDate]       = useState('');
+  const [orderPage, setOrderPage]       = useState(1);
+  const ORDER_PAGE_SIZE = 20;
+
+  // Sales summary state
+  const [salesRange, setSalesRange]     = useState('today');
+  const [salesFrom, setSalesFrom]       = useState(today());
+  const [salesTo, setSalesTo]           = useState(today());
+  const [salesData, setSalesData]       = useState([]);
+  const [salesLoading, setSalesLoading] = useState(false);
+
+  // Inventory / product form state
+  const [showForm, setShowForm]         = useState(false);
+  const [editProduct, setEditProduct]   = useState(null);
+  const [imageFile, setImageFile]       = useState(null);
   const [imagePreview, setImagePreview] = useState('');
-  const [uploadingImage, setUploadingImage] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const fileInputRef = useRef(null);
+  const [submitting, setSubmitting]     = useState(false);
+  const [uploading, setUploading]       = useState(false);
+  const [invSearch, setInvSearch]       = useState('');
+  const [invCat, setInvCat]             = useState('');
+  const [invStock, setInvStock]         = useState('');
+  const fileRef = useRef(null);
 
-  const [formData, setFormData] = useState({
-    name: '', category: '', retailPrice: '', wholesalePrice: '',
-    countInStock: '', description: '', brand: '', image: '',
-  });
-  const [promotionSubject, setPromotionSubject] = useState('');
-  const [promotionMessage, setPromotionMessage] = useState('');
-  const [sendingPromotion, setSendingPromotion] = useState(false);
-  const [promotionResult, setPromotionResult] = useState('');
+  const emptyForm = { name: '', category: '', retailPrice: '', wholesalePrice: '', countInStock: '', description: '', brand: '', image: '', minWholesaleQuantity: '10' };
+  const [form, setForm] = useState(emptyForm);
 
-  const categories = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
+  // Promotions state
+  const [promoSubject, setPromoSubject] = useState('');
+  const [promoBody, setPromoBody]       = useState('');
+  const [promoSending, setPromoSending] = useState(false);
 
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem('cv-token');
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
+  // ── Toast helper ───────────────────────────────────────────────────────────
+  const showToast = useCallback((msg, type = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 4000);
+  }, []);
 
-  const fetchOrders = async () => {
+  // ── Data fetching ──────────────────────────────────────────────────────────
+  const fetchOrders = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/orders`, { headers: { ...getAuthHeaders() } });
-      if (res.ok) setOrders(await res.json());
-      else setError(`Failed to fetch orders: ${res.status}`);
-    } catch { setError('Cannot connect to backend.'); }
-    finally { setLoading(false); }
-  };
+      const r = await fetch(`${API_BASE_URL}/orders`, { headers: authHdr() });
+      if (r.ok) setOrders(await r.json());
+    } catch { /* silent — handled by loading state */ }
+  }, []);
 
-  const fetchAnalytics = async () => {
+  const fetchProducts = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/admin/analytics`, { headers: { ...getAuthHeaders() } });
-      if (res.ok) setAnalytics(await res.json());
-    } catch { console.warn('Unable to load analytics'); }
-  };
+      const r = await fetch(`${API_BASE_URL}/products`, { headers: authHdr() });
+      if (r.ok) setProducts(await r.json());
+    } catch {}
+  }, []);
 
-  const fetchProducts = async () => {
+  const fetchAnalytics = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/products`, { headers: { ...getAuthHeaders() } });
-      if (res.ok) setProducts(await res.json());
-    } catch { console.error('Cannot load products'); }
-  };
+      const r = await fetch(`${API_BASE_URL}/admin/analytics`, { headers: authHdr() });
+      if (r.ok) setAnalytics(await r.json());
+    } catch {}
+  }, []);
 
-  useEffect(() => { fetchOrders(); fetchProducts(); fetchAnalytics(); }, []);
+  const fetchCustomers = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/admin/customers`, { headers: authHdr() });
+      if (r.ok) setCustomers(await r.json());
+    } catch {}
+  }, []);
 
-  const totalRevenue = analytics?.totalRevenue ??
-    orders.filter(o => o.status !== 'Pending').reduce((s, o) => s + (o.totalAmount || 0), 0);
+  useEffect(() => {
+    Promise.all([fetchOrders(), fetchProducts(), fetchAnalytics(), fetchCustomers()])
+      .finally(() => setLoading(false));
+    // Poll every 30 s for real-time feel (replace with WebSocket when ready)
+    const poll = setInterval(() => { fetchOrders(); fetchAnalytics(); }, 30000);
+    return () => clearInterval(poll);
+  }, [fetchOrders, fetchProducts, fetchAnalytics, fetchCustomers]);
 
-  const pendingOrders   = orders.filter(o => o.status === 'Pending').length;
-  const deliveredOrders = orders.filter(o => o.status === 'Delivered').length;
-  const lowStock        = products.filter(p => p.countInStock <= 5);
+  // ── Sales summary ──────────────────────────────────────────────────────────
+  const computeSalesRange = useCallback(() => {
+    if (salesRange === 'today')   return { from: today(),        to: today() };
+    if (salesRange === 'week')    return { from: nDaysAgo(6),    to: today() };
+    if (salesRange === 'month')   return { from: nDaysAgo(29),   to: today() };
+    return { from: salesFrom, to: salesTo };
+  }, [salesRange, salesFrom, salesTo]);
 
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const activeCustomers = new Set(
-    orders
-      .filter(o => new Date(o.createdAt).getTime() > thirtyDaysAgo)
-      .map(o => o.phone || o.customerName)
-  ).size;
+  const buildSalesSummary = useCallback(() => {
+    setSalesLoading(true);
+    const { from, to } = computeSalesRange();
+    const fromMs = new Date(from).setHours(0, 0, 0, 0);
+    const toMs   = new Date(to).setHours(23, 59, 59, 999);
 
+    const filtered = orders.filter(o => {
+      const t = new Date(o.createdAt).getTime();
+      return t >= fromMs && t <= toMs && o.status !== 'Cancelled';
+    });
+
+    // Aggregate by product name
+    const map = {};
+    filtered.forEach(o => {
+      (o.items || []).forEach(item => {
+        const key = item.name || 'Unknown';
+        if (!map[key]) map[key] = { name: key, qty: 0, revenue: 0, orders: new Set() };
+        map[key].qty     += Number(item.quantity || 1);
+        map[key].revenue += Number(item.price || 0) * Number(item.quantity || 1);
+        map[key].orders.add(o._id);
+      });
+    });
+
+    const rows = Object.values(map)
+      .map(r => ({ ...r, orderCount: r.orders.size }))
+      .sort((a, b) => b.revenue - a.revenue);
+
+    setSalesData(rows);
+    setSalesLoading(false);
+  }, [orders, computeSalesRange]);
+
+  useEffect(() => {
+    if (tab === 'sales') buildSalesSummary();
+  }, [tab, salesRange, salesFrom, salesTo, orders, buildSalesSummary]);
+
+  // ── KPIs ───────────────────────────────────────────────────────────────────
+  const totalRevenue    = analytics?.totalRevenue ?? orders.filter(o => o.status !== 'Cancelled').reduce((s, o) => s + (o.totalAmount || 0), 0);
+  const todayOrders     = orders.filter(o => new Date(o.createdAt).toDateString() === new Date().toDateString());
+  const pendingCount    = orders.filter(o => o.status === 'Pending' || o.status === 'Order Received').length;
+  const deliveredCount  = orders.filter(o => o.status === 'Delivered').length;
+  const lowStock        = products.filter(p => (p.countInStock || 0) <= 5);
+  const outOfStock      = products.filter(p => (p.countInStock || 0) === 0);
+  const todayRevenue    = todayOrders.filter(o => o.status !== 'Cancelled').reduce((s, o) => s + (o.totalAmount || 0), 0);
+
+  // Last 6 months chart data
   const months = Array.from({ length: 6 }, (_, i) => {
     const d = new Date();
     d.setMonth(d.getMonth() - (5 - i));
-    return { label: d.toLocaleString('en-KE', { month: 'short' }), year: d.getFullYear(), month: d.getMonth() };
+    return { label: d.toLocaleString('en-KE', { month: 'short' }), y: d.getFullYear(), m: d.getMonth() };
+  });
+  const ordersByMonth  = months.map(({ y, m }) => orders.filter(o => { const d = new Date(o.createdAt); return d.getMonth() === m && d.getFullYear() === y; }).length);
+  const revenueByMonth = months.map(({ y, m }) => orders.filter(o => { const d = new Date(o.createdAt); return d.getMonth() === m && d.getFullYear() === y && o.status !== 'Cancelled'; }).reduce((s, o) => s + (o.totalAmount || 0), 0));
+  const chartLabels    = months.map(m => m.label);
+
+  // Top products by items ordered — TODAY only
+  const todayMidnight = new Date();
+  todayMidnight.setHours(0, 0, 0, 0);
+
+  const productSales = {};
+  orders
+    .filter(o =>
+      (o.status === 'Delivered' || o.status === 'Paid') &&
+      new Date(o.createdAt) >= todayMidnight
+    )
+    .forEach(o => {
+      (o.items || []).forEach(item => {
+        if (!productSales[item.name]) productSales[item.name] = 0;
+        productSales[item.name] += item.quantity || 1;
+      });
+    });
+  const topProducts = Object.entries(productSales).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const todayLabel  = new Date().toLocaleDateString('en-KE', { weekday: 'long', day: 'numeric', month: 'short' });
+
+  // ── Orders filtering ───────────────────────────────────────────────────────
+  const filteredOrders = orders.filter(o => {
+    const q = orderSearch.toLowerCase();
+    const matchSearch = !q || o.customerName?.toLowerCase().includes(q) || o.phone?.includes(q) || o._id?.toLowerCase().includes(q) || o.email?.toLowerCase().includes(q);
+    const matchStatus = !orderStatus || o.status === orderStatus;
+    const matchDate   = !orderDate   || new Date(o.createdAt).toDateString() === new Date(orderDate).toDateString();
+    return matchSearch && matchStatus && matchDate;
+  });
+  const paginatedOrders = filteredOrders.slice((orderPage - 1) * ORDER_PAGE_SIZE, orderPage * ORDER_PAGE_SIZE);
+  const totalPages      = Math.ceil(filteredOrders.length / ORDER_PAGE_SIZE);
+
+  // ── Inventory filtering ────────────────────────────────────────────────────
+  const categories     = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
+  const filteredProds  = products.filter(p => {
+    const q = invSearch.toLowerCase();
+    const matchQ   = !q || p.name?.toLowerCase().includes(q) || p.brand?.toLowerCase().includes(q);
+    const matchCat = !invCat  || p.category === invCat;
+    const matchStk = !invStock || (invStock === 'low' && p.countInStock <= 5 && p.countInStock > 0) || (invStock === 'out' && p.countInStock === 0) || (invStock === 'ok' && p.countInStock > 5);
+    return matchQ && matchCat && matchStk;
   });
 
-  const ordersByMonth = months.map(m =>
-    orders.filter(o => {
-      const d = new Date(o.createdAt);
-      return d.getMonth() === m.month && d.getFullYear() === m.year;
-    }).length
-  );
-
-  const revenueByMonth = months.map(m =>
-    orders
-      .filter(o => {
-        const d = new Date(o.createdAt);
-        return d.getMonth() === m.month && d.getFullYear() === m.year && o.status !== 'Cancelled';
-      })
-      .reduce((s, o) => s + (o.totalAmount || 0), 0)
-  );
-
-  const chartLabels = months.map(m => m.label);
-
-  const handleImageSelect = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { alert('Image too large! Please use an image under 5MB.'); return; }
-    setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
+  // ── Order status update ────────────────────────────────────────────────────
+  const updateOrderStatus = async (id, status) => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/orders/${id}/status`, { method: 'PATCH', headers: jsonHdr(), body: JSON.stringify({ status }) });
+      if (r.ok) { await fetchOrders(); showToast(`Status updated to "${status}"`); }
+      else showToast('Failed to update status', 'error');
+    } catch { showToast('Network error', 'error'); }
   };
 
+  // ── Product CRUD ───────────────────────────────────────────────────────────
   const uploadImage = async () => {
-    if (!imageFile) return formData.image;
-    setUploadingImage(true);
+    if (!imageFile) return form.image;
+    setUploading(true);
     try {
-      const data = new FormData();
-      data.append('image', imageFile);
-      const res = await fetch(`${API_BASE_URL}/upload`, { method: 'POST', body: data });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.message);
-      return result.url;
-    } catch (err) {
-      alert('Image upload failed: ' + err.message);
-      return null;
-    } finally { setUploadingImage(false); }
+      const fd = new FormData();
+      fd.append('image', imageFile);
+      const r = await fetch(`${API_BASE_URL}/upload`, { method: 'POST', headers: authHdr(), body: fd });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message);
+      return d.url;
+    } catch (e) { showToast('Image upload failed: ' + e.message, 'error'); return null; }
+    finally { setUploading(false); }
   };
 
   const handleProductSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
     try {
-      let imageUrl = formData.image;
-      if (imageFile) { imageUrl = await uploadImage(); if (!imageUrl) { setSubmitting(false); return; } }
-      const url = editingProduct
-        ? `${API_BASE_URL}/products/${editingProduct._id}`
-        : `${API_BASE_URL}/products`;
-      const res = await fetch(url, {
-        method: editingProduct ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({
-          ...formData, image: imageUrl,
-          retailPrice: Number(formData.retailPrice),
-          wholesalePrice: Number(formData.wholesalePrice),
-          countInStock: Number(formData.countInStock),
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) { alert(editingProduct ? '✅ Product updated!' : '✅ Product added!'); resetForm(); fetchProducts(); }
-      else alert('❌ Error: ' + data.message);
-    } catch (err) { alert('Server error: ' + err.message); }
+      let imageUrl = form.image;
+      if (imageFile) { imageUrl = await uploadImage(); if (!imageUrl) return; }
+      const payload = { ...form, image: imageUrl, retailPrice: +form.retailPrice, wholesalePrice: +form.wholesalePrice, countInStock: +form.countInStock, minWholesaleQuantity: +form.minWholesaleQuantity };
+      const url    = editProduct ? `${API_BASE_URL}/products/${editProduct._id}` : `${API_BASE_URL}/products`;
+      const method = editProduct ? 'PUT' : 'POST';
+      const r = await fetch(url, { method, headers: jsonHdr(), body: JSON.stringify(payload) });
+      if (r.ok) {
+        showToast(editProduct ? 'Product updated' : 'Product added');
+        resetForm(); fetchProducts();
+      } else {
+        const d = await r.json();
+        showToast(d.message || 'Failed to save product', 'error');
+      }
+    } catch (e) { showToast(e.message, 'error'); }
     finally { setSubmitting(false); }
   };
 
-  const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete "${name}"?`)) return;
+  const deleteProduct = async (id, name) => {
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/products/${id}`, { method: 'DELETE', headers: { ...getAuthHeaders() } });
-      if (res.ok) { alert('🗑️ Deleted!'); fetchProducts(); }
-      else { const data = await res.json(); alert('❌ Error: ' + (data.message || 'Unable to delete.')); }
-    } catch { alert('Connection error.'); }
+      const r = await fetch(`${API_BASE_URL}/products/${id}`, { method: 'DELETE', headers: authHdr() });
+      if (r.ok) { showToast('Product deleted'); fetchProducts(); }
+      else showToast('Failed to delete product', 'error');
+    } catch { showToast('Network error', 'error'); }
   };
 
-  const startEdit = (product) => {
-    setEditingProduct(product);
-    setFormData({
-      name: product.name || '', category: product.category || '',
-      retailPrice: product.retailPrice || '', wholesalePrice: product.wholesalePrice || '',
-      countInStock: product.countInStock || '', description: product.description || '',
-      brand: product.brand || '', image: product.image || '',
-    });
-    setImagePreview(product.image || '');
+  const startEdit = (p) => {
+    setEditProduct(p);
+    setForm({ name: p.name || '', category: p.category || '', retailPrice: p.retailPrice || '', wholesalePrice: p.wholesalePrice || '', countInStock: p.countInStock ?? '', description: p.description || '', brand: p.brand || '', image: p.image || '', minWholesaleQuantity: p.minWholesaleQuantity || '10' });
+    setImagePreview(p.image || '');
     setImageFile(null);
-    setShowAddForm(true);
+    setShowForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const resetForm = () => {
-    setShowAddForm(false); setEditingProduct(null);
-    setImageFile(null); setImagePreview('');
-    setFormData({ name: '', category: '', retailPrice: '', wholesalePrice: '', countInStock: '', description: '', brand: '', image: '' });
-  };
+  const resetForm = () => { setShowForm(false); setEditProduct(null); setForm(emptyForm); setImageFile(null); setImagePreview(''); };
 
-  const handleSendPromotion = async () => {
-    if (!promotionSubject.trim() || !promotionMessage.trim()) { alert('Please enter both subject and message.'); return; }
-    setSendingPromotion(true);
-    setPromotionResult('Sending promotion...');
+  // ── Promotions ─────────────────────────────────────────────────────────────
+  const sendPromotion = async () => {
+    if (!promoSubject.trim() || !promoBody.trim()) { showToast('Subject and message are required', 'warning'); return; }
+    setPromoSending(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/products/promotions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ subject: promotionSubject, message: promotionMessage }),
-      });
-      const data = await res.json();
-      if (res.ok) { setPromotionResult(`Promotion sent to ${data.recipients} users.`); setPromotionSubject(''); setPromotionMessage(''); }
-      else setPromotionResult(`Error: ${data.message || 'Unable to send promotion.'}`);
-    } catch { setPromotionResult('Network error while sending promotion.'); }
-    finally { setSendingPromotion(false); setTimeout(() => setPromotionResult(''), 5000); }
+      const r = await fetch(`${API_BASE_URL}/products/promotions`, { method: 'POST', headers: jsonHdr(), body: JSON.stringify({ subject: promoSubject, message: promoBody }) });
+      const d = await r.json();
+      if (r.ok) { showToast(`Promotion sent to ${d.recipients || 0} users`); setPromoSubject(''); setPromoBody(''); }
+      else showToast(d.message || 'Failed to send promotion', 'error');
+    } catch { showToast('Network error', 'error'); }
+    finally { setPromoSending(false); }
   };
 
-  const handleStatusChange = async (orderId, newStatus) => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/orders/${orderId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (res.ok) fetchOrders();
-      else { const data = await res.json(); alert('❌ Error: ' + (data.message || 'Try again.')); }
-    } catch { alert('Connection error.'); }
+  // ── Export helpers ─────────────────────────────────────────────────────────
+  const exportSalesCSV = () => {
+    const rows = [['Product', 'Qty Sold', 'Revenue (KSh)', 'Orders']];
+    salesData.forEach(r => rows.push([r.name, r.qty, r.revenue, r.orderCount]));
+    const csv  = rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = `sales-summary-${today()}.csv`;
+    a.click();
   };
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   if (loading) return (
-    <div style={{ padding: 60, textAlign: 'center', fontFamily: 'sans-serif' }}>🔄 Loading admin dashboard...</div>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 16, fontFamily: 'system-ui, sans-serif' }}>
+      <Spinner size={36} />
+      <p style={{ color: '#64748b', fontSize: 15 }}>Loading admin dashboard…</p>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
   );
 
-  const tabs = [
-    { key: 'overview',  label: '📊 Overview' },
-    { key: 'orders',    label: `🚚 Orders (${orders.length})` },
-    { key: 'inventory', label: `📦 Inventory (${products.length})` },
+  const TABS = [
+    { key: 'overview',   icon: '📊', label: 'Overview' },
+    { key: 'orders',     icon: '🚚', label: `Orders (${orders.length})` },
+    { key: 'inventory',  icon: '📦', label: `Inventory (${products.length})` },
+    { key: 'sales',      icon: '📈', label: 'Sales Summary' },
+    { key: 'customers',  icon: '👥', label: `Customers (${customers.length})` },
+    { key: 'promotions', icon: '📣', label: 'Promotions' },
   ];
 
   return (
-    <div style={{ padding: '24px', maxWidth: 1200, margin: '0 auto', fontFamily: 'sans-serif', color: '#334155' }}>
+    <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', color: '#334155', background: '#f8fafc', minHeight: '100vh' }}>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        * { box-sizing: border-box; }
+        select:focus, input:focus, textarea:focus { outline: 2px solid #166534; outline-offset: 1px; border-color: transparent; }
+        @media (max-width: 600px) { .kpi-grid { grid-template-columns: 1fr 1fr !important; } .tab-label { display: none; } }
+        @media (max-width: 400px) { .kpi-grid { grid-template-columns: 1fr !important; } }
+        .tab-btn:hover { background: #f1f5f9 !important; }
+        .row-hover:hover { background: #f8fafc !important; }
+        .action-btn { transition: opacity .15s; }
+        .action-btn:hover { opacity: .85; }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+      `}</style>
 
-      {/* Header */}
-      <div style={{ background: 'linear-gradient(135deg, #166534, #15803d)', color: 'white', padding: '22px 26px', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 24, boxShadow: '0 4px 15px rgba(21,128,61,0.3)' }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: 22 }}>🛡️ Cerestrial Ventures Admin Panel</h2>
-          <p style={{ margin: '5px 0 0', opacity: 0.85, fontSize: 13 }}>Inventory, orders, analytics and fulfillment controls</p>
-        </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {[
-            { label: 'Total Sales', value: fmt(totalRevenue) },
-            { label: 'Products',    value: products.length },
-            { label: 'Orders',      value: analytics?.totalOrders || orders.length },
-          ].map(s => (
-            <div key={s.label} style={{ backgroundColor: 'rgba(255,255,255,0.15)', padding: '10px 16px', borderRadius: 8, textAlign: 'center', border: '1px solid rgba(255,255,255,0.2)' }}>
-              <div style={{ fontSize: 10, opacity: 0.8, textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
-              <div style={{ fontSize: 18, fontWeight: 'bold', marginTop: 2 }}>{s.value}</div>
+      {/* ── Header ── */}
+      <div style={{ background: 'linear-gradient(135deg, #14532d, #166534, #15803d)', color: 'white', padding: '20px 24px' }}>
+        <div style={{ maxWidth: 1280, margin: '0 auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                <span style={{ fontSize: 22 }}>🛡️</span>
+                <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Cerestrial Ventures</h1>
+              </div>
+              <p style={{ margin: 0, opacity: .8, fontSize: 13 }}>Admin Control Panel · {new Date().toLocaleDateString('en-KE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
             </div>
-          ))}
-          {lowStock.length > 0 && (
-            <div style={{ backgroundColor: '#dc2626', padding: '10px 16px', borderRadius: 8, textAlign: 'center', border: '1px solid #f87171' }}>
-              <div style={{ fontSize: 10, opacity: 0.9, textTransform: 'uppercase' }}>⚠️ Low Stock</div>
-              <div style={{ fontSize: 18, fontWeight: 'bold' }}>{lowStock.length}</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {[
+                { l: "Today's Revenue", v: fmt(todayRevenue) },
+                { l: "Today's Orders",  v: todayOrders.length },
+                { l: 'Total Revenue',   v: fmt(totalRevenue) },
+                { l: 'Low Stock',       v: lowStock.length, danger: lowStock.length > 0 },
+              ].map(s => (
+                <div key={s.l} style={{ background: s.danger ? '#dc2626' : 'rgba(255,255,255,.15)', border: s.danger ? '1px solid #f87171' : '1px solid rgba(255,255,255,.2)', borderRadius: 10, padding: '8px 16px', textAlign: 'center', minWidth: 80 }}>
+                  <div style={{ fontSize: 10, opacity: .85, textTransform: 'uppercase', letterSpacing: '.05em' }}>{s.l}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>{s.v}</div>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
-        {tabs.map(tab => (
-          <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{ padding: '10px 20px', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: 14, transition: 'all 0.2s', backgroundColor: activeTab === tab.key ? '#166534' : 'white', color: activeTab === tab.key ? 'white' : '#334155', border: activeTab === tab.key ? 'none' : '1px solid #cbd5e1', boxShadow: activeTab === tab.key ? '0 2px 8px rgba(22,101,52,0.3)' : 'none' }}>
-            {tab.label}
-          </button>
-        ))}
-        <button onClick={() => navigate('/admin/orders')} style={{ padding: '10px 20px', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: 14, backgroundColor: '#1d4ed8', color: 'white', border: 'none', marginLeft: 'auto' }}>
-          🔍 Full Orders Management →
-        </button>
-      </div>
-
-      {error && <div style={{ backgroundColor: '#fee2e2', color: '#991b1b', padding: 12, borderRadius: 8, marginBottom: 16 }}>{error}</div>}
-
-      {/* OVERVIEW TAB */}
-      {activeTab === 'overview' && (
-        <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 24 }}>
-            <StatCard label="Total Orders"     value={orders.length}          sub="All time"                      accent="#16a34a" icon="🛒" />
-            <StatCard label="Revenue"          value={fmt(totalRevenue)}      sub="Excl. pending & cancelled"     accent="#16a34a" icon="💰" />
-            <StatCard label="Pending Orders"   value={pendingOrders}          sub="Awaiting fulfilment"           accent="#f59e0b" icon="⏳" />
-            <StatCard label="Delivered"        value={deliveredOrders}        sub={`${orders.length ? Math.round(deliveredOrders / orders.length * 100) : 0}% fulfilment rate`} accent="#16a34a" icon="✅" />
-            <StatCard label="Low Stock"        value={lowStock.length}        sub="Products ≤ 5 units"            accent="#ef4444" icon="⚠️" />
-            <StatCard label="Active Customers" value={activeCustomers}        sub="Ordered in last 30 days"       accent="#3b82f6" icon="👥" />
-          </div>
-
-          {lowStock.length > 0 && (
-            <div style={{ backgroundColor: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 8, padding: '10px 16px', marginBottom: 20 }}>
-              <strong style={{ color: '#b45309' }}>⚠️ Low Stock Alert: </strong>
-              <span style={{ color: '#92400e' }}>{lowStock.map(p => `${p.name} (${p.countInStock} left)`).join(' · ')}</span>
-            </div>
-          )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
-            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 10, padding: '18px 20px' }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>Monthly Orders</div>
-              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 14 }}>Last 6 months</div>
-              <SimpleBarChart data={ordersByMonth} labels={chartLabels} color="#16a34a" />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 11, color: '#64748b' }}>
-                <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#16a34a' }} /> Orders
-              </div>
-            </div>
-
-            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 10, padding: '18px 20px' }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>Revenue Trend</div>
-              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 14 }}>Last 6 months (KSh)</div>
-              <SimpleBarChart data={revenueByMonth} labels={chartLabels} color="#3b82f6" formatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v} />
-              <div style={{ display: 'flex', gap: 12, marginTop: 10, fontSize: 11, color: '#64748b' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#3b82f6' }} /> Revenue
-                </span>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* ORDERS TAB */}
-      {activeTab === 'orders' && (
-        <div style={{ backgroundColor: 'white', border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, minWidth: 700 }}>
-              <thead>
-                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                  {['ID / Customer', 'Items', 'Total', '📍 Delivery Location', 'Status'].map(h => (
-                    <th key={h} style={{ padding: '13px 15px', textAlign: 'left', color: '#475569', fontWeight: 600 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {orders.length === 0 ? (
-                  <tr><td colSpan="5" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>No orders yet.</td></tr>
-                ) : orders.map(order => (
-                  <tr key={order._id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '13px 15px' }}>
-                      <strong style={{ color: '#15803d', fontSize: 13 }}>#{order._id.slice(-6).toUpperCase()}</strong>
-                      <div style={{ fontWeight: 'bold', color: '#1e293b' }}>{order.customerName}</div>
-                      <div style={{ fontSize: 12, color: '#94a3b8' }}>{order.phone}</div>
-                    </td>
-                    <td style={{ padding: '13px 15px', fontSize: 13 }}>
-                      {order.items?.map((item, i) => (
-                        <div key={i} style={{ marginBottom: 2 }}>{item.name} <span style={{ color: '#94a3b8' }}>×{item.quantity}</span></div>
-                      ))}
-                    </td>
-                    <td style={{ padding: '13px 15px', fontWeight: 'bold', color: '#15803d' }}>{fmt(order.totalAmount)}</td>
-                    <td style={{ padding: '13px 15px' }}>
-                      <div style={{ fontSize: 13, color: '#334155', marginBottom: 4 }}>
-                        {order.location || <span style={{ color: '#94a3b8' }}>No address</span>}
-                      </div>
-                      {order.latitude && order.longitude ? (
-                        <>
-                          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>{order.latitude.toFixed(5)}, {order.longitude.toFixed(5)}</div>
-                          <button onClick={() => window.open(`https://www.google.com/maps?q=${order.latitude},${order.longitude}`, '_blank')} style={{ padding: '5px 11px', backgroundColor: '#1d4ed8', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>🗺️ Open Location</button>
-                        </>
-                      ) : (
-                        <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠️ No pin saved</span>
-                      )}
-                    </td>
-                    <td style={{ padding: '13px 15px' }}>
-                      <select value={order.status} onChange={e => handleStatusChange(order._id, e.target.value)}
-                        style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #e2e8f0', fontWeight: 'bold', cursor: 'pointer', fontSize: 13, backgroundColor: order.status === 'Pending' ? '#fef3c7' : order.status === 'Delivered' ? '#dcfce7' : order.status === 'Paid' ? '#dbeafe' : '#f1f5f9', color: order.status === 'Pending' ? '#b45309' : order.status === 'Delivered' ? '#15803d' : order.status === 'Paid' ? '#1d4ed8' : '#334155' }}>
-                        <option value="Pending">⏳ Pending</option>
-                        <option value="Order Received">📬 Order Received</option>
-                        <option value="Payment Confirmed">✅ Payment Confirmed</option>
-                        <option value="Paid">💰 Paid</option>
-                        <option value="Processing Order">⚙️ Processing</option>
-                        <option value="Packed">📦 Packed</option>
-                        <option value="Out for Delivery">🚚 Out for Delivery</option>
-                        <option value="Delivered">🏁 Delivered</option>
-                        <option value="Cancelled">❌ Cancelled</option>
-                      </select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* INVENTORY TAB */}
-      {activeTab === 'inventory' && (
-        <>
-          {lowStock.length > 0 && (
-            <div style={{ backgroundColor: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 8, padding: '12px 16px', marginBottom: 20 }}>
-              <strong style={{ color: '#b45309' }}>⚠️ Low Stock Alert: </strong>
-              <span style={{ color: '#92400e' }}>{lowStock.map(p => `${p.name} (${p.countInStock} left)`).join(' · ')}</span>
-            </div>
-          )}
-
-          <div style={{ backgroundColor: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: 20, marginBottom: 20 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#1e293b' }}>📣 Promotion Broadcast</div>
-                <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>Send a promotion message to users with promotions enabled.</div>
-              </div>
-              <button onClick={() => { setPromotionSubject(''); setPromotionMessage(''); setPromotionResult(''); }} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #cbd5e1', backgroundColor: 'white', color: '#334155', cursor: 'pointer', fontWeight: 'bold' }}>Reset</button>
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <label style={lbl}>Subject</label>
-              <input value={promotionSubject} onChange={e => setPromotionSubject(e.target.value)} style={inp} placeholder="e.g. 20% off today" />
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <label style={lbl}>Message</label>
-              <textarea value={promotionMessage} onChange={e => setPromotionMessage(e.target.value)} style={{ ...inp, minHeight: 120, resize: 'vertical' }} placeholder="Type the promotion message here..." />
-            </div>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-              <button onClick={handleSendPromotion} disabled={sendingPromotion} style={{ padding: '12px 24px', borderRadius: 8, border: 'none', backgroundColor: '#15803d', color: 'white', cursor: sendingPromotion ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}>
-                {sendingPromotion ? 'Sending…' : 'Send Promotion'}
-              </button>
-              {promotionResult && <span style={{ color: promotionResult.startsWith('Error') ? '#dc2626' : '#15803d', fontSize: 13 }}>{promotionResult}</span>}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <h3 style={{ margin: 0, color: '#1e293b' }}>📦 Product Catalog</h3>
-            <button onClick={() => { resetForm(); setShowAddForm(!showAddForm); }} style={{ padding: '10px 20px', fontWeight: 'bold', cursor: 'pointer', fontSize: 14, borderRadius: 8, border: 'none', backgroundColor: showAddForm ? '#dc2626' : '#15803d', color: 'white' }}>
-              {showAddForm ? '✕ Cancel' : '+ Add New Product'}
+      {/* ── Tab bar ── */}
+      <div style={{ background: 'white', borderBottom: '1px solid #e2e8f0', position: 'sticky', top: 0, zIndex: 100 }}>
+        <div style={{ maxWidth: 1280, margin: '0 auto', padding: '0 24px', overflowX: 'auto', display: 'flex', gap: 2, scrollbarWidth: 'none' }}>
+          {TABS.map(t => (
+            <button key={t.key} className="tab-btn" onClick={() => setTab(t.key)} style={{ padding: '14px 16px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: tab === t.key ? 700 : 500, color: tab === t.key ? '#166534' : '#64748b', borderBottom: tab === t.key ? '2px solid #166534' : '2px solid transparent', whiteSpace: 'nowrap', transition: 'color .15s', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>{t.icon}</span><span className="tab-label">{t.label}</span>
             </button>
-          </div>
+          ))}
+        </div>
+      </div>
 
-          {showAddForm && (
-            <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 25, marginBottom: 25 }}>
-              <h4 style={{ margin: '0 0 20px', fontSize: 16, color: '#1e293b' }}>{editingProduct ? '✏️ Edit Product' : '➕ Add New Product'}</h4>
-              <form onSubmit={handleProductSubmit}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
-                  <div>
-                    <label style={lbl}>Product Name *</label>
-                    <input required value={formData.name} style={inp} placeholder="e.g., Mumias Sugar 2kg" onChange={e => setFormData({ ...formData, name: e.target.value })} />
+      {/* ── Page content ── */}
+      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '24px 16px' }}>
+
+        {/* ═══════════════════════════════════════ OVERVIEW ══════════════════ */}
+        {tab === 'overview' && (
+          <>
+            {/* KPI cards */}
+            <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))', gap: 12, marginBottom: 24 }}>
+              <KPICard label="Total Orders"      value={fmtNum(orders.length)}          sub="All time"                                        color="#16a34a" icon="🛒" onClick={() => setTab('orders')} />
+              <KPICard label="Total Revenue"     value={fmt(totalRevenue)}              sub="Excl. cancelled"                                 color="#16a34a" icon="💰" />
+              <KPICard label="Today's Orders"    value={todayOrders.length}             sub={`${fmt(todayRevenue)} today`}                    color="#3b82f6" icon="📅" onClick={() => setTab('orders')} />
+              <KPICard label="Pending"           value={pendingCount}                   sub="Awaiting fulfilment"                             color="#f59e0b" icon="⏳" onClick={() => { setTab('orders'); setOrderStatus('Pending'); }} />
+              <KPICard label="Delivered"         value={fmtNum(deliveredCount)}         sub={`${pct(deliveredCount, orders.length)}% rate`}   color="#16a34a" icon="✅" />
+              <KPICard label="Products"          value={products.length}                sub={`${outOfStock.length} out of stock`}             color="#8b5cf6" icon="📦" onClick={() => setTab('inventory')} />
+              <KPICard label="Low Stock"         value={lowStock.length}                sub="≤ 5 units remaining"                             color="#ef4444" icon="⚠️" onClick={() => { setTab('inventory'); setInvStock('low'); }} />
+              <KPICard label="Customers"         value={customers.length || '—'}        sub="Registered accounts"                             color="#0891b2" icon="👥" onClick={() => setTab('customers')} />
+            </div>
+
+            {/* Low stock alert */}
+            {lowStock.length > 0 && (
+              <div style={{ background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 10, padding: '12px 16px', marginBottom: 20, display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                <span style={{ color: '#b45309', fontWeight: 700, whiteSpace: 'nowrap' }}>⚠️ Low stock:</span>
+                <span style={{ color: '#92400e', fontSize: 13 }}>{lowStock.map(p => `${p.name} (${p.countInStock} left)`).join(' · ')}</span>
+              </div>
+            )}
+
+            {/* Charts */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 20 }}>
+              <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 2 }}>Monthly Orders</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 16 }}>Last 6 months</div>
+                <BarChart data={ordersByMonth} labels={chartLabels} color="#16a34a" />
+              </div>
+              <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 2 }}>Monthly Revenue</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 16 }}>Last 6 months (KSh)</div>
+                <BarChart data={revenueByMonth} labels={chartLabels} color="#3b82f6" formatter={v => v >= 1000 ? `${Math.round(v / 1000)}k` : v} />
+              </div>
+            </div>
+
+            {/* Top products + Recent orders */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+              {/* Top selling products */}
+              <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>🏆 Products Sold Today</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 16 }}>{todayLabel}</div>
+                {topProducts.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '24px 0', color: '#94a3b8' }}>
+                    <div style={{ fontSize: 28, marginBottom: 8 }}>📦</div>
+                    <div style={{ fontSize: 13 }}>No delivered orders yet today.</div>
                   </div>
-                  <div>
-                    <label style={lbl}>Category *</label>
-                    <select required value={formData.category} style={inp} onChange={e => setFormData({ ...formData, category: e.target.value })}>
-                      <option value="">-- Select --</option>
-                      {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                      {formData.category && !categories.includes(formData.category) && <option value={formData.category}>{formData.category}</option>}
-                    </select>
+                ) : topProducts.map(([name, qty], i) => (
+                  <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                    <span style={{ width: 22, height: 22, borderRadius: '50%', background: ['#16a34a','#3b82f6','#f59e0b','#ef4444','#8b5cf6'][i], color: 'white', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{i + 1}</span>
+                    <span style={{ flex: 1, fontSize: 13, color: '#1e293b', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                    <span style={{ background: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{qty} sold</span>
                   </div>
-                  <div>
-                    <label style={lbl}>Brand</label>
-                    <input value={formData.brand} style={inp} placeholder="e.g., Mumias" onChange={e => setFormData({ ...formData, brand: e.target.value })} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Retail Price (KSh) *</label>
-                    <input required type="number" min="0" value={formData.retailPrice} style={inp} placeholder="e.g., 230" onChange={e => setFormData({ ...formData, retailPrice: e.target.value })} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Wholesale Price (KSh) *</label>
-                    <input required type="number" min="0" value={formData.wholesalePrice} style={inp} placeholder="e.g., 210" onChange={e => setFormData({ ...formData, wholesalePrice: e.target.value })} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Stock Quantity *</label>
-                    <input required type="number" min="0" value={formData.countInStock} style={inp} placeholder="e.g., 50" onChange={e => setFormData({ ...formData, countInStock: e.target.value })} />
-                  </div>
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <label style={lbl}>Product Image</label>
-                    <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                      <div
-                        onClick={() => fileInputRef.current && fileInputRef.current.click()}
-                        style={{ width: 120, height: 120, borderRadius: 10, border: '2px dashed #cbd5e1', overflow: 'hidden', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', flexShrink: 0 }}
-                        onMouseOver={e => e.currentTarget.style.borderColor = '#15803d'}
-                        onMouseOut={e => e.currentTarget.style.borderColor = '#cbd5e1'}
-                      >
-                        {imagePreview ? <img src={imagePreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ textAlign: 'center', color: '#94a3b8' }}><div style={{ fontSize: 32 }}>📷</div><div style={{ fontSize: 11, marginTop: 5 }}>Click to upload</div></div>}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 200 }}>
-                        <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageSelect} style={{ display: 'none' }} />
-                        <button type="button" onClick={() => fileInputRef.current && fileInputRef.current.click()} style={{ padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 'bold', fontSize: 14, marginBottom: 10, display: 'block' }}>📁 Choose Image File</button>
-                        {imageFile && <div style={{ fontSize: 12, color: '#15803d', marginBottom: 8 }}>✅ {imageFile.name} ({(imageFile.size / 1024).toFixed(0)}KB)</div>}
-                        <div style={{ color: '#64748b', fontSize: 12, marginBottom: 8 }}>Or paste an image URL:</div>
-                        <input value={formData.image} style={{ ...inp, fontSize: 12 }} placeholder="https://res.cloudinary.com/..." onChange={e => { setFormData({ ...formData, image: e.target.value }); setImagePreview(e.target.value); setImageFile(null); }} />
-                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>Supported: JPG, PNG, WebP · Max 5MB</div>
-                      </div>
+                ))}
+              </div>
+
+              {/* Recent orders */}
+              <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>🕐 Recent Orders</div>
+                  <button onClick={() => setTab('orders')} style={{ fontSize: 12, color: '#166534', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>View all →</button>
+                </div>
+                {orders.slice(0, 6).map(o => (
+                  <div key={o._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{o.customerName}</div>
+                      <div style={{ fontSize: 11, color: '#94a3b8' }}>#{o._id.slice(-6).toUpperCase()} · {new Date(o.createdAt).toLocaleDateString('en-KE')}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#15803d' }}>{fmt(o.totalAmount)}</div>
+                      <Badge status={o.status} />
                     </div>
                   </div>
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <label style={lbl}>Description</label>
-                    <textarea value={formData.description} rows="2" style={{ ...inp, resize: 'vertical' }} placeholder="Short product description..." onChange={e => setFormData({ ...formData, description: e.target.value })} />
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-                  <button type="submit" disabled={submitting || uploadingImage} style={{ padding: '12px 30px', backgroundColor: submitting ? '#86efac' : '#15803d', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: submitting ? 'not-allowed' : 'pointer', fontSize: 15 }}>
-                    {uploadingImage ? '📤 Uploading image...' : submitting ? '💾 Saving...' : editingProduct ? '💾 Save Changes' : '➕ Add Product'}
-                  </button>
-                  <button type="button" onClick={resetForm} style={{ padding: '12px 20px', backgroundColor: 'white', color: '#64748b', border: '1px solid #cbd5e1', borderRadius: 8, cursor: 'pointer' }}>Cancel</button>
-                </div>
-              </form>
+                ))}
+              </div>
             </div>
-          )}
+          </>
+        )}
 
-          <div style={{ backgroundColor: 'white', border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, minWidth: 700 }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                    {['Product', 'Category', 'Retail', 'Wholesale', 'Stock', 'Actions'].map(h => (
-                      <th key={h} style={{ padding: '13px 15px', textAlign: 'left', color: '#475569', fontWeight: 600 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {products.length === 0 ? (
-                    <tr><td colSpan="6" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>No products yet.</td></tr>
-                  ) : products.map(p => (
-                    <tr key={p._id} style={{ borderBottom: '1px solid #f1f5f9', backgroundColor: p.countInStock <= 5 ? '#fffbeb' : 'white' }}>
-                      <td style={{ padding: '12px 15px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          {p.image ? <img src={p.image} alt={p.name} style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8, flexShrink: 0, border: '1px solid #e2e8f0' }} /> : <div style={{ width: 48, height: 48, backgroundColor: '#f1f5f9', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>📦</div>}
-                          <div>
-                            <div style={{ fontWeight: 'bold', color: '#1e293b' }}>{p.name}</div>
-                            <div style={{ fontSize: 12, color: '#94a3b8' }}>{p.brand}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td style={{ padding: '12px 15px' }}>
-                        <span style={{ backgroundColor: '#dcfce7', color: '#15803d', padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600 }}>{p.category}</span>
-                      </td>
-                      <td style={{ padding: '12px 15px', fontWeight: 'bold', color: '#15803d' }}>{fmt(p.retailPrice)}</td>
-                      <td style={{ padding: '12px 15px', color: '#64748b' }}>{fmt(p.wholesalePrice)}</td>
-                      <td style={{ padding: '12px 15px' }}>
-                        <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 'bold', backgroundColor: p.countInStock <= 5 ? '#fee2e2' : p.countInStock <= 15 ? '#fef3c7' : '#dcfce7', color: p.countInStock <= 5 ? '#dc2626' : p.countInStock <= 15 ? '#b45309' : '#15803d' }}>
-                          {p.countInStock <= 5 ? '⚠️ ' : ''}{p.countInStock} units
-                        </span>
-                      </td>
-                      <td style={{ padding: '12px 15px' }}>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <button onClick={() => startEdit(p)} style={{ padding: '6px 14px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold', whiteSpace: 'nowrap' }}>✏️ Edit</button>
-                          <button onClick={() => handleDelete(p._id, p.name)} style={{ padding: '6px 14px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 'bold', whiteSpace: 'nowrap' }}>🗑️ Delete</button>
-                        </div>
-                      </td>
+        {/* ═══════════════════════════════════════ ORDERS ════════════════════ */}
+        {tab === 'orders' && (
+          <>
+            {/* Filters */}
+            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '16px 20px', marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '1 1 180px' }}>
+                <label style={lStyle}>Search</label>
+                <input value={orderSearch} onChange={e => { setOrderSearch(e.target.value); setOrderPage(1); }} style={iStyle} placeholder="Name, phone, order ID…" />
+              </div>
+              <div style={{ flex: '0 1 160px' }}>
+                <label style={lStyle}>Status</label>
+                <select value={orderStatus} onChange={e => { setOrderStatus(e.target.value); setOrderPage(1); }} style={iStyle}>
+                  <option value="">All statuses</option>
+                  {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: '0 1 150px' }}>
+                <label style={lStyle}>Date</label>
+                <input type="date" value={orderDate} onChange={e => { setOrderDate(e.target.value); setOrderPage(1); }} style={iStyle} />
+              </div>
+              <button onClick={() => { setOrderSearch(''); setOrderStatus(''); setOrderDate(''); setOrderPage(1); }} style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', color: '#64748b', cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}>
+                Clear filters
+              </button>
+            </div>
+
+            <div style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
+              Showing {paginatedOrders.length} of {filteredOrders.length} orders
+              {filteredOrders.length !== orders.length && ` (filtered from ${orders.length})`}
+            </div>
+
+            {/* Orders table */}
+            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 720 }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                      {['Order', 'Customer', 'Items', 'Total', 'Location', 'Date', 'Status', 'Actions'].map(h => (
+                        <th key={h} style={{ padding: '12px 14px', textAlign: 'left', color: '#475569', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {paginatedOrders.length === 0 ? (
+                      <tr><td colSpan={8} style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>No orders match your filters.</td></tr>
+                    ) : paginatedOrders.map(o => (
+                      <tr key={o._id} className="row-hover" style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '12px 14px', fontFamily: 'monospace', fontWeight: 700, color: '#166534', fontSize: 12 }}>
+                          #{o._id.slice(-6).toUpperCase()}
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ fontWeight: 600, color: '#0f172a' }}>{o.customerName}</div>
+                          <div style={{ fontSize: 11, color: '#94a3b8' }}>{o.phone}</div>
+                          {o.email && <div style={{ fontSize: 11, color: '#94a3b8' }}>{o.email}</div>}
+                        </td>
+                        <td style={{ padding: '12px 14px', maxWidth: 160 }}>
+                          {(o.items || []).slice(0, 3).map((it, i) => (
+                            <div key={i} style={{ fontSize: 12, color: '#334155', marginBottom: 1 }}>
+                              {it.name} <span style={{ color: '#94a3b8' }}>×{it.quantity}</span>
+                            </div>
+                          ))}
+                          {(o.items || []).length > 3 && <div style={{ fontSize: 11, color: '#94a3b8' }}>+{o.items.length - 3} more</div>}
+                        </td>
+                        <td style={{ padding: '12px 14px', fontWeight: 700, color: '#15803d', whiteSpace: 'nowrap' }}>{fmt(o.totalAmount)}</td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ fontSize: 12, color: '#334155', marginBottom: 4, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {o.location || <span style={{ color: '#94a3b8' }}>—</span>}
+                          </div>
+                          {o.latitude && o.longitude && (
+                            <a href={`https://www.google.com/maps?q=${o.latitude},${o.longitude}`} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#1d4ed8', textDecoration: 'none' }}>📍 View map</a>
+                          )}
+                        </td>
+                        <td style={{ padding: '12px 14px', fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>
+                          {new Date(o.createdAt).toLocaleDateString('en-KE')}<br />
+                          <span style={{ color: '#94a3b8' }}>{new Date(o.createdAt).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' })}</span>
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <select
+                            value={o.status}
+                            onChange={e => updateOrderStatus(o._id, e.target.value)}
+                            style={{ ...iStyle, fontSize: 12, padding: '6px 8px', width: 'auto', minWidth: 130, fontWeight: 600, color: STATUS_META[o.status]?.color || '#334155', background: STATUS_META[o.status]?.bg || '#f1f5f9', border: `1px solid ${STATUS_META[o.status]?.color || '#cbd5e1'}44` }}
+                          >
+                            {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          {o.latitude && o.longitude && (
+                            <a
+                              href={`https://www.google.com/maps?q=${o.latitude},${o.longitude}`}
+                              target="_blank" rel="noreferrer"
+                              className="action-btn"
+                              style={{ display: 'inline-block', padding: '5px 10px', background: '#1d4ed8', color: 'white', borderRadius: 6, fontSize: 11, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap' }}
+                            >
+                              🗺️ Map
+                            </a>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 20 }}>
+                <button onClick={() => setOrderPage(p => Math.max(1, p - 1))} disabled={orderPage === 1} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', cursor: orderPage === 1 ? 'default' : 'pointer', color: orderPage === 1 ? '#cbd5e1' : '#334155', fontSize: 13 }}>← Prev</button>
+                <span style={{ fontSize: 13, color: '#64748b' }}>Page {orderPage} of {totalPages}</span>
+                <button onClick={() => setOrderPage(p => Math.min(totalPages, p + 1))} disabled={orderPage === totalPages} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', cursor: orderPage === totalPages ? 'default' : 'pointer', color: orderPage === totalPages ? '#cbd5e1' : '#334155', fontSize: 13 }}>Next →</button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ═══════════════════════════════════════ INVENTORY ═════════════════ */}
+        {tab === 'inventory' && (
+          <>
+            {/* Low/out of stock alerts */}
+            {lowStock.length > 0 && (
+              <div style={{ background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+                <strong style={{ color: '#b45309' }}>⚠️ Low stock ({lowStock.length}):</strong>{' '}
+                <span style={{ color: '#92400e', fontSize: 13 }}>{lowStock.map(p => `${p.name} (${p.countInStock})`).join(' · ')}</span>
+              </div>
+            )}
+            {outOfStock.length > 0 && (
+              <div style={{ background: '#fee2e2', border: '1px solid #f87171', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+                <strong style={{ color: '#991b1b' }}>🚫 Out of stock ({outOfStock.length}):</strong>{' '}
+                <span style={{ color: '#991b1b', fontSize: 13 }}>{outOfStock.map(p => p.name).join(' · ')}</span>
+              </div>
+            )}
+
+            {/* Toolbar */}
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 20 }}>
+              <div style={{ flex: '1 1 180px' }}>
+                <label style={lStyle}>Search products</label>
+                <input value={invSearch} onChange={e => setInvSearch(e.target.value)} style={iStyle} placeholder="Name or brand…" />
+              </div>
+              <div style={{ flex: '0 1 150px' }}>
+                <label style={lStyle}>Category</label>
+                <select value={invCat} onChange={e => setInvCat(e.target.value)} style={iStyle}>
+                  <option value="">All categories</option>
+                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: '0 1 140px' }}>
+                <label style={lStyle}>Stock level</label>
+                <select value={invStock} onChange={e => setInvStock(e.target.value)} style={iStyle}>
+                  <option value="">All</option>
+                  <option value="ok">In stock</option>
+                  <option value="low">Low (≤5)</option>
+                  <option value="out">Out of stock</option>
+                </select>
+              </div>
+              <button
+                onClick={() => { resetForm(); setShowForm(f => !f); }}
+                style={{ padding: '9px 20px', borderRadius: 8, border: 'none', background: showForm ? '#dc2626' : '#166534', color: 'white', cursor: 'pointer', fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                {showForm ? '✕ Cancel' : '+ Add Product'}
+              </button>
+            </div>
+
+            {/* Add / Edit form */}
+            {showForm && (
+              <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '24px', marginBottom: 24 }}>
+                <h3 style={{ margin: '0 0 20px', fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
+                  {editProduct ? '✏️ Edit Product' : '➕ New Product'}
+                </h3>
+                <form onSubmit={handleProductSubmit}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+                    <div><label style={lStyle}>Product name *</label><input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={iStyle} placeholder="e.g. Mumias Sugar 2kg" /></div>
+                    <div>
+                      <label style={lStyle}>Category *</label>
+                      <select required value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} style={iStyle}>
+                        <option value="">— Select —</option>
+                        {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                        {form.category && !categories.includes(form.category) && <option value={form.category}>{form.category}</option>}
+                      </select>
+                    </div>
+                    <div><label style={lStyle}>Brand</label><input value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} style={iStyle} placeholder="e.g. Mumias" /></div>
+                    <div><label style={lStyle}>Retail price (KSh) *</label><input required type="number" min="0" value={form.retailPrice} onChange={e => setForm({ ...form, retailPrice: e.target.value })} style={iStyle} placeholder="230" /></div>
+                    <div><label style={lStyle}>Wholesale price (KSh) *</label><input required type="number" min="0" value={form.wholesalePrice} onChange={e => setForm({ ...form, wholesalePrice: e.target.value })} style={iStyle} placeholder="210" /></div>
+                    <div><label style={lStyle}>Stock quantity *</label><input required type="number" min="0" value={form.countInStock} onChange={e => setForm({ ...form, countInStock: e.target.value })} style={iStyle} placeholder="50" /></div>
+                    <div><label style={lStyle}>Min wholesale qty</label><input type="number" min="1" value={form.minWholesaleQuantity} onChange={e => setForm({ ...form, minWholesaleQuantity: e.target.value })} style={iStyle} placeholder="10" /></div>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <label style={lStyle}>Product image</label>
+                      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                        <div
+                          onClick={() => fileRef.current?.click()}
+                          style={{ width: 110, height: 110, borderRadius: 10, border: '2px dashed #cbd5e1', overflow: 'hidden', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', flexShrink: 0 }}
+                        >
+                          {imagePreview
+                            ? <img src={imagePreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            : <div style={{ textAlign: 'center', color: '#94a3b8' }}><div style={{ fontSize: 28 }}>📷</div><div style={{ fontSize: 11, marginTop: 4 }}>Click to upload</div></div>}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <input ref={fileRef} type="file" accept="image/*" onChange={e => { const f = e.target.files[0]; if (!f) return; if (f.size > 5 * 1024 * 1024) { showToast('Image exceeds 5 MB', 'error'); return; } setImageFile(f); setImagePreview(URL.createObjectURL(f)); }} style={{ display: 'none' }} />
+                          <button type="button" onClick={() => fileRef.current?.click()} style={{ padding: '9px 18px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'block', marginBottom: 10 }}>📁 Choose file</button>
+                          {imageFile && <div style={{ fontSize: 12, color: '#15803d', marginBottom: 8 }}>✅ {imageFile.name}</div>}
+                          <label style={{ ...lStyle, marginTop: 4 }}>Or paste image URL</label>
+                          <input value={form.image} onChange={e => { setForm({ ...form, image: e.target.value }); setImagePreview(e.target.value); setImageFile(null); }} style={iStyle} placeholder="https://…" />
+                          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 5 }}>JPG, PNG, WebP · max 5 MB</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ gridColumn: '1 / -1' }}><label style={lStyle}>Description</label><textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} rows={2} style={{ ...iStyle, resize: 'vertical' }} placeholder="Short product description…" /></div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+                    <button type="submit" disabled={submitting || uploading} style={{ padding: '11px 28px', background: submitting ? '#86efac' : '#166534', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', fontSize: 14 }}>
+                      {uploading ? '📤 Uploading…' : submitting ? '💾 Saving…' : editProduct ? '💾 Save changes' : '➕ Add product'}
+                    </button>
+                    <button type="button" onClick={resetForm} style={{ padding: '11px 20px', background: 'white', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Products table */}
+            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid #f1f5f9', fontSize: 13, color: '#64748b' }}>
+                {filteredProds.length} of {products.length} products
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 660 }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                      {['Product', 'Category', 'Retail', 'Wholesale', 'Min Wholesale Qty', 'Stock', 'Actions'].map(h => (
+                        <th key={h} style={{ padding: '12px 14px', textAlign: 'left', color: '#475569', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredProds.length === 0 ? (
+                      <tr><td colSpan={7} style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>No products match your filters.</td></tr>
+                    ) : filteredProds.map(p => (
+                      <tr key={p._id} className="row-hover" style={{ borderBottom: '1px solid #f1f5f9', background: p.countInStock === 0 ? '#fff5f5' : p.countInStock <= 5 ? '#fffbeb' : 'white' }}>
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            {p.image
+                              ? <img src={p.image} alt={p.name} style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, border: '1px solid #e2e8f0', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
+                              : <div style={{ width: 44, height: 44, background: '#f1f5f9', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>📦</div>}
+                            <div>
+                              <div style={{ fontWeight: 600, color: '#0f172a' }}>{p.name}</div>
+                              <div style={{ fontSize: 11, color: '#94a3b8' }}>{p.brand || '—'}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <span style={{ background: '#dcfce7', color: '#166534', padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600 }}>{p.category}</span>
+                        </td>
+                        <td style={{ padding: '12px 14px', fontWeight: 700, color: '#166534', whiteSpace: 'nowrap' }}>{fmt(p.retailPrice)}</td>
+                        <td style={{ padding: '12px 14px', color: '#64748b', whiteSpace: 'nowrap' }}>{fmt(p.wholesalePrice)}</td>
+                        <td style={{ padding: '12px 14px', color: '#64748b', textAlign: 'center' }}>{p.minWholesaleQuantity || 10}</td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: p.countInStock === 0 ? '#fee2e2' : p.countInStock <= 5 ? '#fef3c7' : '#dcfce7', color: p.countInStock === 0 ? '#dc2626' : p.countInStock <= 5 ? '#b45309' : '#166534', whiteSpace: 'nowrap' }}>
+                            {p.countInStock === 0 ? '🚫 Out' : p.countInStock <= 5 ? `⚠️ ${p.countInStock}` : `${p.countInStock} units`}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button onClick={() => startEdit(p)} className="action-btn" style={{ padding: '6px 12px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>✏️ Edit</button>
+                            <button onClick={() => deleteProduct(p._id, p.name)} className="action-btn" style={{ padding: '6px 12px', background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>🗑️ Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ═══════════════════════════════════════ SALES SUMMARY ═════════════ */}
+        {tab === 'sales' && (
+          <>
+            {/* Range picker */}
+            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '16px 20px', marginBottom: 20, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              {[['today', 'Today'], ['week', 'Last 7 days'], ['month', 'Last 30 days'], ['custom', 'Custom range']].map(([v, l]) => (
+                <button key={v} onClick={() => setSalesRange(v)} style={{ padding: '9px 18px', borderRadius: 8, border: `1px solid ${salesRange === v ? '#166534' : '#e2e8f0'}`, background: salesRange === v ? '#166534' : 'white', color: salesRange === v ? 'white' : '#64748b', cursor: 'pointer', fontWeight: salesRange === v ? 700 : 500, fontSize: 13 }}>{l}</button>
+              ))}
+              {salesRange === 'custom' && (
+                <>
+                  <div><label style={lStyle}>From</label><input type="date" value={salesFrom} onChange={e => setSalesFrom(e.target.value)} style={{ ...iStyle, width: 150 }} /></div>
+                  <div><label style={lStyle}>To</label><input type="date" value={salesTo} onChange={e => setSalesTo(e.target.value)} style={{ ...iStyle, width: 150 }} /></div>
+                </>
+              )}
+              <button onClick={buildSalesSummary} style={{ padding: '9px 18px', background: '#166534', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>🔄 Refresh</button>
+              <button onClick={exportSalesCSV} style={{ padding: '9px 18px', background: '#1d4ed8', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13, marginLeft: 'auto' }}>⬇️ Export CSV</button>
+            </div>
+
+            {/* Summary KPIs */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 20 }}>
+              <KPICard label="Products sold" value={salesData.reduce((s, r) => s + r.qty, 0)}                  color="#16a34a" icon="📦" />
+              <KPICard label="Total revenue"  value={fmt(salesData.reduce((s, r) => s + r.revenue, 0))}        color="#3b82f6" icon="💰" />
+              <KPICard label="Total orders"   value={new Set(orders.filter(o => { const { from, to } = computeSalesRange(); const t = new Date(o.createdAt).getTime(); return t >= new Date(from).setHours(0,0,0,0) && t <= new Date(to).setHours(23,59,59,999) && o.status !== 'Cancelled'; }).map(o => o._id)).size} color="#f59e0b" icon="🛒" />
+              <KPICard label="Unique items"   value={salesData.length}                                          color="#8b5cf6" icon="🏷️" />
+            </div>
+
+            {salesLoading ? (
+              <div style={{ textAlign: 'center', padding: 60 }}><Spinner size={32} /></div>
+            ) : (
+              <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                        {['#', 'Product', 'Qty sold', 'Revenue', 'Orders', 'Avg per order'].map(h => (
+                          <th key={h} style={{ padding: '12px 16px', textAlign: 'left', color: '#475569', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {salesData.length === 0 ? (
+                        <tr><td colSpan={6} style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>No sales data for this period.</td></tr>
+                      ) : salesData.map((r, i) => (
+                        <tr key={r.name} className="row-hover" style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 700, width: 40 }}>{i + 1}</td>
+                          <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a' }}>{r.name}</td>
+                          <td style={{ padding: '12px 16px' }}>
+                            <span style={{ fontWeight: 700, color: '#166534' }}>{fmtNum(r.qty)}</span>
+                            <div style={{ height: 4, background: '#e2e8f0', borderRadius: 2, marginTop: 4, width: 80 }}>
+                              <div style={{ height: '100%', background: '#16a34a', borderRadius: 2, width: `${Math.round((r.qty / Math.max(...salesData.map(x => x.qty))) * 100)}%` }} />
+                            </div>
+                          </td>
+                          <td style={{ padding: '12px 16px', fontWeight: 700, color: '#166534', whiteSpace: 'nowrap' }}>{fmt(r.revenue)}</td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{r.orderCount}</td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fmt(r.orderCount ? Math.round(r.revenue / r.orderCount) : 0)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {salesData.length > 0 && (
+                      <tfoot>
+                        <tr style={{ background: '#f0fdf4', borderTop: '2px solid #bbf7d0' }}>
+                          <td colSpan={2} style={{ padding: '12px 16px', fontWeight: 700, color: '#166534' }}>Totals</td>
+                          <td style={{ padding: '12px 16px', fontWeight: 700, color: '#166534' }}>{fmtNum(salesData.reduce((s, r) => s + r.qty, 0))}</td>
+                          <td style={{ padding: '12px 16px', fontWeight: 700, color: '#166534', whiteSpace: 'nowrap' }}>{fmt(salesData.reduce((s, r) => s + r.revenue, 0))}</td>
+                          <td colSpan={2} />
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ═══════════════════════════════════════ CUSTOMERS ═════════════════ */}
+        {tab === 'customers' && (
+          <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+            {customers.length === 0 ? (
+              <div style={{ padding: 60, textAlign: 'center', color: '#94a3b8' }}>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>👥</div>
+                <p>No registered customers yet — or the <code>/admin/customers</code> endpoint needs to be added to your server.</p>
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 600 }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                      {['Name', 'Email', 'Phone', 'Account type', 'Joined', 'Orders'].map(h => (
+                        <th key={h} style={{ padding: '12px 16px', textAlign: 'left', color: '#475569', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {customers.map(c => {
+                      const userOrders = orders.filter(o => o.email === c.email || o.userId === c._id);
+                      return (
+                        <tr key={c._id} className="row-hover" style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '12px 16px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#dcfce7', color: '#166534', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+                                {(c.name || '?')[0].toUpperCase()}
+                              </div>
+                              <span style={{ fontWeight: 600, color: '#0f172a' }}>{c.name}</span>
+                            </div>
+                          </td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{c.email}</td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{c.phone || '—'}</td>
+                          <td style={{ padding: '12px 16px' }}>
+                            <span style={{ background: c.accountType === 'Wholesale' ? '#dbeafe' : '#dcfce7', color: c.accountType === 'Wholesale' ? '#1d4ed8' : '#166534', padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600 }}>{c.accountType || 'Retail'}</span>
+                          </td>
+                          <td style={{ padding: '12px 16px', color: '#64748b', whiteSpace: 'nowrap' }}>{new Date(c.createdAt).toLocaleDateString('en-KE')}</td>
+                          <td style={{ padding: '12px 16px', fontWeight: 700, color: '#166534' }}>{userOrders.length}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════ PROMOTIONS ════════════════ */}
+        {tab === 'promotions' && (
+          <div style={{ maxWidth: 680 }}>
+            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '24px' }}>
+              <h3 style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 700, color: '#0f172a' }}>📣 Promotion Broadcast</h3>
+              <p style={{ margin: '0 0 24px', fontSize: 13, color: '#64748b' }}>Send a promotional email to all users who have enabled promotions in their notification preferences.</p>
+              <div style={{ marginBottom: 16 }}>
+                <label style={lStyle}>Subject line *</label>
+                <input value={promoSubject} onChange={e => setPromoSubject(e.target.value)} style={iStyle} placeholder="e.g. 20% off all cooking oils this weekend!" />
+              </div>
+              <div style={{ marginBottom: 24 }}>
+                <label style={lStyle}>Message body *</label>
+                <textarea value={promoBody} onChange={e => setPromoBody(e.target.value)} rows={6} style={{ ...iStyle, resize: 'vertical' }} placeholder="Write the promotion details here…" />
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={sendPromotion} disabled={promoSending} style={{ padding: '12px 28px', background: promoSending ? '#86efac' : '#166534', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: promoSending ? 'not-allowed' : 'pointer', fontSize: 14 }}>
+                  {promoSending ? '📤 Sending…' : '📤 Send promotion'}
+                </button>
+                <button onClick={() => { setPromoSubject(''); setPromoBody(''); }} style={{ padding: '12px 20px', background: 'white', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>Clear</button>
+              </div>
             </div>
           </div>
-        </>
-      )}
+        )}
+
+      </div>
+
+      {/* ── Toast ── */}
+      {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
 };

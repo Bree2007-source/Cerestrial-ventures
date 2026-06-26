@@ -1,89 +1,148 @@
-import express from 'express'
-import jwt from 'jsonwebtoken'
-import User from '../models/User.js'
-import Notification from '../models/Notification.js'
+import express        from 'express';
+import jwt            from 'jsonwebtoken';
+import bcrypt         from 'bcryptjs';
+import cookieParser   from 'cookie-parser';
 
-const router = express.Router()
+import User           from '../models/User.js';
+import Notification   from '../models/Notification.js';
+import LoginOtp       from '../models/LoginOtp.js';
+import TrustedDevice  from '../models/TrustedDevice.js';
 
-const protect = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1]
-  if (!token) return res.status(401).json({ message: 'No token' })
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET)
-    req.userId = decoded.id
-    next()
-  } catch {
-    res.status(401).json({ message: 'Invalid token' })
-  }
+import { protect }                      from '../middleware/authMiddleware.js';
+import { loginLimiter, otpLimiter }     from '../middleware/rateLimiter.js';
+import { logSecurityEvent }             from '../utils/securityLogger.js';
+import { generateOtp, getOtpExpiry, generateDeviceToken } from '../utils/otpUtils.js';
+import { parseUserAgent }               from '../utils/deviceParser.js';
+import { sendOtpEmail }                 from '../utils/sendEmail.js';
+import { sendOtpSms }                   from '../utils/sendSms.js';
+
+const router = express.Router();
+
+// ── Helper: safe user payload ─────────────────────────────────────────────
+function userPayload(user) {
+  return {
+    _id:                     user._id,
+    name:                    user.name,
+    email:                   user.email,
+    phone:                   user.phone,
+    phoneNumber:             user.phoneNumber,
+    isAdmin:                 user.isAdmin,
+    accountType:             user.accountType,
+    businessInfo:            user.businessInfo,
+    notificationPreferences: user.notificationPreferences,
+    passwordChangedAt:       user.passwordChangedAt,
+    createdAt:               user.createdAt,
+  };
 }
 
-// REGISTER
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /api/auth/register
+// ═══════════════════════════════════════════════════════════════════════════
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, phone } = req.body
-    const exists = await User.findOne({ email })
-    if (exists) return res.status(400).json({ message: 'Email already in use' })
+    const { name, email, password, phone, accountType, businessInfo } = req.body;
 
-    const user = await User.create({ name, email, password, phone })
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
+    if (!name || !email || !password)
+      return res.status(400).json({ success: false, message: 'Name, email and password are required.' });
 
-    // Notify admins about the new registration
+    const exists = await User.findOne({ email: email.toLowerCase().trim() });
+    if (exists)
+      return res.status(400).json({ success: false, message: 'An account with this email already exists.' });
+
+    const user = await User.create({
+      name:        name.trim(),
+      email:       email.toLowerCase().trim(),
+      password,
+      phone:       phone || '',
+      accountType: accountType || 'Retail',
+      businessInfo: accountType === 'Wholesale' ? businessInfo : undefined,
+    });
+
     await Notification.create({
       isAdminNotification: true,
-      title: 'New Customer Registered 👤',
+      title:   'New Customer Registered 👤',
       message: `${name} (${email}) just created an account.`,
-      type: 'new_customer',
-      link: '/admin',
-    })
+      type:    'new_customer',
+      link:    '/admin',
+    }).catch(() => {});
 
-    res.status(201).json({
-      _id: user._id, name: user.name, email: user.email,
-      phone: user.phone, isAdmin: user.isAdmin, token
-    })
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    return res.status(201).json({
+      success: true,
+      token,
+      user: userPayload(user),
+    });
   } catch (err) {
-    res.status(500).json({ message: err.message })
+    console.error('[Register]', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error.' });
   }
-})
+});
 
-// LOGIN
-router.post('/login', async (req, res) => {
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /api/auth/login  — direct login, no OTP
+// ═══════════════════════════════════════════════════════════════════════════
+router.post('/login', loginLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body
-    const user = await User.findOne({ email })
-    if (!user) return res.status(400).json({ message: 'Invalid credentials' })
+    const { email, password } = req.body;
 
-    const isMatch = await user.matchPassword(password)
-    if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' })
+    if (!email || !password)
+      return res.status(400).json({ success: false, message: 'Email and password are required.' });
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' })
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
 
-    res.json({
-      _id: user._id, name: user.name, email: user.email,
-      phone: user.phone, isAdmin: user.isAdmin,
-      notificationPreferences: user.notificationPreferences, token
-    })
+    if (!user || !(await user.matchPassword(password))) {
+      if (user) await logSecurityEvent(user._id, 'LOGIN_FAILURE', req);
+      return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+    }
+
+    if (user.isDisabled)
+      return res.status(403).json({ success: false, message: 'This account has been disabled. Please contact support.' });
+
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    await logSecurityEvent(user._id, 'LOGIN_SUCCESS', req, { method: 'direct' });
+
+    return res.json({
+      success: true,
+      token,
+      user: userPayload(user),
+    });
   } catch (err) {
-    res.status(500).json({ message: err.message })
+    console.error('[Login]', err);
+    res.status(500).json({ success: false, message: 'Server error. Please try again.' });
   }
-})
+});
 
-// UPDATE profile
+// ═══════════════════════════════════════════════════════════════════════════
+// PUT /api/auth/update  — update own profile
+// ═══════════════════════════════════════════════════════════════════════════
 router.put('/update', protect, async (req, res) => {
   try {
-    const { name, email, phone } = req.body
+    const { name, email, phone, phoneNumber, accountType, businessInfo, notificationPreferences } = req.body;
+
+    const updates = {};
+    if (name)  updates.name  = name.trim();
+    if (email) updates.email = email.toLowerCase().trim();
+    if (phone !== undefined) updates.phone = phone;
+    if (phoneNumber !== undefined) updates.phoneNumber = phoneNumber;
+    if (accountType) updates.accountType = accountType;
+    if (businessInfo) updates.businessInfo = businessInfo;
+    if (notificationPreferences) updates.notificationPreferences = notificationPreferences;
+
     const user = await User.findByIdAndUpdate(
       req.userId,
-      { name, email, phone },
-      { new: true }
-    ).select('-password')
+      updates,
+      { new: true, runValidators: true }
+    ).select('-password');
 
-    res.json({
-      _id: user._id, name: user.name, email: user.email,
-      phone: user.phone, isAdmin: user.isAdmin
-    })
+    if (!user)
+      return res.status(404).json({ success: false, message: 'User not found.' });
+
+    res.json({ success: true, user: userPayload(user) });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' })
+    console.error('[UpdateProfile]', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
   }
-})
+});
 
-export default router
+export default router;

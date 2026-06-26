@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import API_BASE_URL from '../config';
+import { useAuth } from '../context/AuthContext';
 
 const RegisterPage = () => {
   const [formData, setFormData] = useState({
@@ -13,6 +13,7 @@ const RegisterPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
+  const { register } = useAuth();
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -30,27 +31,23 @@ const RegisterPage = () => {
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formData.name,
-          email: formData.email,
-          phone: formData.phone,
-          password: formData.password
-        }),
-      });
+      const result = await register(formData.name, formData.email, formData.password, formData.phone);
+      console.log('[RegisterPage] register() result:', result);
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Registration failed.');
+      if (!result.user) {
+        throw new Error('Registration failed — no user returned.');
       }
 
-      // Automatically redirect to log in page on successful account setup
-      navigate('/login');
+      if (result.token) {
+        // Backend auto-logged the new user in
+        navigate(result.user.isAdmin ? '/admin' : '/');
+      } else {
+        // Account created — let them log in right away
+        navigate('/login');
+      }
     } catch (err) {
-      setError(err.message);
+      console.error('[RegisterPage] register error:', err.response?.data || err.message || err);
+      setError(err.response?.data?.message || err.message || 'Registration failed.');
     } finally {
       setLoading(false);
     }

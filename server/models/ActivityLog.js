@@ -1,12 +1,36 @@
-import mongoose from 'mongoose'
+/**
+ * server/models/ActivityLog.js
+ *
+ * Tracks admin actions (status changes, product edits, etc.)
+ * This is already imported in your existing adminRoutes.js —
+ * replace this file if one already exists, or create it if not.
+ */
 
-const activityLogSchema = new mongoose.Schema({
-  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false },
-  action: { type: String, required: true },
-  resource: { type: String, required: true },
-  details: { type: Object, default: {} },
-  ip: { type: String },
-}, { timestamps: true })
+import mongoose from 'mongoose';
 
-const ActivityLog = mongoose.model('ActivityLog', activityLogSchema)
-export default ActivityLog
+const activityLogSchema = new mongoose.Schema(
+  {
+    adminId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref:  'User',
+      default: null,
+    },
+    action: {
+      type:     String,
+      required: true,
+      trim:     true,
+    },
+    meta: {
+      type:    mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+  },
+  { timestamps: true }
+);
+
+// Keep only the most recent 1 000 logs to avoid unbounded growth.
+// Run this index once; MongoDB will handle TTL automatically.
+activityLogSchema.index({ createdAt: -1 });
+
+const ActivityLog = mongoose.model('ActivityLog', activityLogSchema);
+export default ActivityLog;

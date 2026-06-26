@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const LoginPage = () => {
-  const [activeTab, setActiveTab] = useState('login');
+  const [activeTab, setActiveTab]       = useState('login');
   const [showPassword, setShowPassword] = useState(false);
-  const [loginData, setLoginData] = useState({ email: '', password: '' });
+  const [loginData, setLoginData]       = useState({ email: '', password: '' });
   const [registerData, setRegisterData] = useState({ name: '', email: '', phone: '', password: '', confirmPassword: '' });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [loading, setLoading]           = useState(false);
+  const [error, setError]               = useState(null);
   const navigate = useNavigate();
   const { login, register } = useAuth();
 
@@ -18,9 +18,8 @@ const LoginPage = () => {
     setError(null);
     try {
       const result = await login(loginData.email, loginData.password);
-      const user = result?.user;
-      if (!user) throw new Error('Login failed — no user returned.');
-      navigate(user.isAdmin ? '/admin' : '/');
+      if (!result.user) throw new Error('Login failed — no user returned.');
+      navigate(result.user.isAdmin ? '/admin' : '/');
     } catch (err) {
       setError(err.response?.data?.message || err.message || 'Invalid email or password.');
     } finally {
@@ -37,10 +36,19 @@ const LoginPage = () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await register(registerData.name, registerData.email, registerData.password, registerData.phone);
-      const user = result?.user;
-      if (!user) throw new Error('Registration failed — no user returned.');
-      navigate(user.isAdmin ? '/admin' : '/');
+      const result = await register(
+        registerData.name,
+        registerData.email,
+        registerData.password,
+        registerData.phone
+      );
+      if (!result.user) throw new Error('Registration failed — no user returned.');
+      if (result.token) {
+        navigate(result.user.isAdmin ? '/admin' : '/');
+      } else {
+        setActiveTab('login');
+        setLoginData({ email: registerData.email, password: '' });
+      }
     } catch (err) {
       setError(err.response?.data?.message || err.message || 'Registration failed. Try again.');
     } finally {
@@ -57,7 +65,6 @@ const LoginPage = () => {
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', background: '#fff' }}>
-
       <style>{`
         @media (min-width: 768px) {
           .login-wrapper { flex-direction: row !important; }
@@ -72,7 +79,7 @@ const LoginPage = () => {
 
       <div className="login-wrapper" style={{ display: 'flex', flex: 1 }}>
 
-        {/* LEFT PANEL - hidden on mobile */}
+        {/* LEFT PANEL */}
         <div className="login-left" style={{
           flex: 1,
           background: 'linear-gradient(160deg, #f0fdf4 0%, #dcfce7 60%, #bbf7d0 100%)',
@@ -128,15 +135,13 @@ const LoginPage = () => {
           </div>
         </div>
 
-        {/* RIGHT PANEL - full width on mobile */}
+        {/* RIGHT PANEL */}
         <div className="login-right" style={{
           display: 'flex', flexDirection: 'column', justifyContent: 'center',
           padding: '48px 40px', background: '#fff',
           boxShadow: '-4px 0 30px rgba(0,0,0,0.07)',
           boxSizing: 'border-box', overflowY: 'auto',
         }}>
-
-          {/* Mobile logo - only visible on mobile */}
           <div style={{ textAlign: 'center', marginBottom: 28 }} className="mobile-logo">
             <style>{`.mobile-logo { display: none; } @media (max-width: 767px) { .mobile-logo { display: block !important; } }`}</style>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
@@ -150,7 +155,6 @@ const LoginPage = () => {
             <div style={{ fontSize: 12, color: '#16a34a', fontWeight: 700, letterSpacing: 2 }}>WHOLESALE & RETAIL GROCERS</div>
           </div>
 
-          {/* Tabs */}
           <div style={{ display: 'flex', borderBottom: '2px solid #f1f5f9', marginBottom: 28 }}>
             {[{ key: 'login', label: 'LOGIN' }, { key: 'signup', label: 'SIGN UP' }].map(tab => (
               <button key={tab.key}
@@ -167,14 +171,12 @@ const LoginPage = () => {
             ))}
           </div>
 
-          {/* Error */}
           {error && (
             <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px 14px', borderRadius: 8, fontSize: 13, marginBottom: 20 }}>
               ⚠️ {error}
             </div>
           )}
 
-          {/* LOGIN */}
           {activeTab === 'login' && (
             <>
               <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1e293b', margin: '0 0 6px' }}>Login to your account</h2>
@@ -252,7 +254,6 @@ const LoginPage = () => {
             </>
           )}
 
-          {/* SIGN UP */}
           {activeTab === 'signup' && (
             <>
               <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1e293b', margin: '0 0 6px' }}>Create your account</h2>

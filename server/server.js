@@ -4,6 +4,7 @@ dotenv.config()
 import express from 'express'
 import mongoose from 'mongoose'
 import cors from 'cors'
+import cookieParser from 'cookie-parser'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import http from 'http'
@@ -19,129 +20,145 @@ import uploadRoutes from './routes/uploadRoutes.js'
 import paymentRoutes from './routes/payment.js'
 import notificationRoutes from './routes/notificationRoutes.js'
 import passwordResetRoutes from './routes/passwordResetRoutes.js'
+import securityRoutes from './routes/securityRoutes.js'
+
 import User from './models/User.js'
 
 const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+const __dirname  = path.dirname(__filename)
 
-const app = express()
+const app        = express()
 const httpServer = http.createServer(app)
 
+const PORT = process.env.PORT || 5000
+
+// ── Allowed origins ────────────────────────────────────────────────────────
 const allowedOrigins = [
   /^http:\/\/localhost(:\d+)?$/,
   'https://aesthetic-chimera-0d58ee.netlify.app',
   'https://cerestrial-ventures.netlify.app',
   /^https:\/\/[a-z0-9]+--cerestrial-ventures\.netlify\.app$/,
-  /^https:\/\/[a-z0-9]+-cerestrial-ventures\.netlify\.app$/
+  /^https:\/\/[a-z0-9]+-cerestrial-ventures\.netlify\.app$/,
 ]
 
-const io = new Server(httpServer, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    credentials: true
-  }
-})
+const corsOptions = {
+  origin:      allowedOrigins,
+  credentials: true,
+  methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+}
 
+// ── Socket.io ──────────────────────────────────────────────────────────────
+const io = new Server(httpServer, { cors: corsOptions })
 app.set('io', io)
 
 io.on('connection', (socket) => {
   console.log('🟢 Customer connected via socket:', socket.id)
-
   socket.on('join_order', (orderId) => {
     socket.join(orderId)
-    console.log(`📦 Socket ${socket.id} is now tracking order: ${orderId}`)
+    console.log(`📦 Socket ${socket.id} tracking order: ${orderId}`)
   })
-
   socket.on('disconnect', () => {
     console.log('🔴 Customer disconnected:', socket.id)
   })
 })
 
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true
-}))
+// ── Core middleware ────────────────────────────────────────────────────────
+app.use(cors(corsOptions))
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
+app.use(cookieParser())
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
+// ── Health check ───────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.send('🚀 Cerestrial Ventures API is running operational!')
+  res.send('🚀 Cerestrial Ventures API is running!')
 })
 
-app.use('/api/auth', authRoutes)
-app.use('/api/products', productRoutes)
-app.use('/api/orders', orderRoutes)
-app.use('/api/admin', adminRoutes)
-app.use('/api/users', userRoutes)
-app.use('/api/coupons', couponRoutes)
-app.use('/api/upload', uploadRoutes)
-app.use('/api/payments', paymentRoutes)
-app.use('/api/notifications', notificationRoutes)
+// ── Request logger (debug) ─────────────────────────────────────────────────
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path}`)
+  next()
+})
+
+// ── Routes ─────────────────────────────────────────────────────────────────
+app.use('/api/auth',           authRoutes)
+app.use('/api/products',       productRoutes)
+app.use('/api/orders',         orderRoutes)
+app.use('/api/admin',          adminRoutes)
+app.use('/api/users',          userRoutes)
+app.use('/api/coupons',        couponRoutes)
+app.use('/api/upload',         uploadRoutes)
+app.use('/api/payments',       paymentRoutes)
+app.use('/api/notifications',  notificationRoutes)
 app.use('/api/password-reset', passwordResetRoutes)
+app.use('/api/security',       securityRoutes)
 
-// Global Error Handler
+// ── Global error handler ───────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  const message = err?.message || 'Internal Server Error'
-  const stack = err?.stack || String(err)
-  console.error('❌ Server Error:', stack)
-  if (err?.code === 'LIMIT_FILE_SIZE') {
+  console.error('❌ Server Error:', err?.stack || String(err))
+  if (err?.code === 'LIMIT_FILE_SIZE')
     return res.status(400).json({ success: false, message: 'File too large. Max 5MB.' })
-  }
-  if (err?.name === 'MulterError') {
-    return res.status(400).json({ success: false, message: 'Upload error: ' + message })
-  }
-  res.status(err?.status || 500).json({ success: false, message })
+  if (err?.name === 'MulterError')
+    return res.status(400).json({ success: false, message: 'Upload error: ' + err.message })
+  res.status(err?.status || 500).json({
+    success: false,
+    message: err?.message || 'Internal Server Error',
+  })
 })
 
-const PORT = process.env.PORT || 5000
-
-if (!process.env.MONGO_URI) {
-  console.warn('⚠️ WARNING: MONGO_URI is missing from .env file!')
-}
-
+// ── Admin bootstrap ────────────────────────────────────────────────────────
 const ensureAdminUser = async () => {
+  if (!process.env.ADMIN_PASSWORD) {
+    console.warn('⚠️  ADMIN_PASSWORD not set in .env — skipping admin bootstrap.')
+    return
+  }
   try {
-    const existingAdmin = await User.findOne({ email: 'admin@cerestrial.com' })
-    if (!existingAdmin) {
+    const existing = await User.findOne({ email: 'admin@cerestrial.com' })
+    if (!existing) {
       const admin = new User({
-        name: 'Admin',
-        email: 'admin@cerestrial.com',
-        password: process.env.ADMIN_PASSWORD || 'Cerestrial@Admin2024!',
-        isAdmin: true
+        name:     'Admin',
+        email:    'admin@cerestrial.com',
+        password: process.env.ADMIN_PASSWORD,
+        isAdmin:  true,
       })
       await admin.save()
       console.log('✅ Default admin user created: admin@cerestrial.com')
-    } else if (!existingAdmin.isAdmin) {
-      existingAdmin.isAdmin = true
-      await existingAdmin.save()
-      console.log('✅ Existing user updated with isAdmin=true')
+    } else if (!existing.isAdmin) {
+      existing.isAdmin = true
+      await existing.save()
+      console.log('✅ Existing user promoted to admin')
     }
-  } catch (error) {
-    console.error('❌ Admin bootstrap error:', error.message)
+  } catch (err) {
+    console.error('❌ Admin bootstrap error:', err.message)
   }
 }
 
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/cerestrial')
+// ── Database + server start ────────────────────────────────────────────────
+if (!process.env.MONGO_URI) {
+  console.warn('⚠️  WARNING: MONGO_URI is missing from .env!')
+}
+
+mongoose
+  .connect(process.env.MONGO_URI || 'mongodb://localhost:27017/cerestrial')
   .then(async () => {
-    console.log('✅ Connected safely to MongoDB.')
+    console.log('✅ Connected to MongoDB.')
     await ensureAdminUser()
 
     httpServer.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
         console.error(`❌ Port ${PORT} is already in use.`)
-        process.exit(1)
+        return process.exit(1)
       }
-      console.error('❌ Server error:', err)
+      console.error('❌ HTTP server error:', err)
       process.exit(1)
     })
 
     httpServer.listen(PORT, () => {
-      console.log(`🚀 Cerestrial Backend running on port ${PORT}`)
-      console.log(`🔌 Socket.io is active and listening`)
+      console.log(`🚀 Backend running on port ${PORT}`)
+      console.log(`🔌 Socket.io active`)
     })
   })
   .catch((err) => {
-    console.error('❌ Database connection error:', err.message)
+    console.error('❌ MongoDB connection failed:', err.message)
+    process.exit(1)
   })

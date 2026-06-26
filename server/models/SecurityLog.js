@@ -1,26 +1,30 @@
-import mongoose from 'mongoose'
+import mongoose from 'mongoose';
 
 const securityLogSchema = new mongoose.Schema({
   userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    type:     mongoose.Schema.Types.ObjectId,
+    ref:      'User',
     required: true,
   },
-  action: {
-    type: String,
+  event: {          // renamed from 'action' to match securityLogger.js
+    type:     String,
     required: true,
   },
   ipAddress: {
-    type: String,
+    type:    String,
     default: 'unknown',
   },
-  metadata: {
-    type: mongoose.Schema.Types.Mixed,
+  userAgent: {
+    type:    String,
+    default: 'unknown',
+  },
+  meta: {
+    type:    mongoose.Schema.Types.Mixed,
     default: {},
   },
-}, { timestamps: true })
+}, { timestamps: true });
 
-securityLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 90 })
+// Auto-delete logs after 90 days
+securityLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 90 });
 
-const SecurityLog = mongoose.model('SecurityLog', securityLogSchema)
-export default SecurityLog
+export default mongoose.model('SecurityLog', securityLogSchema);

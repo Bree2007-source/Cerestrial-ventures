@@ -26,6 +26,8 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import BottomNav from "./components/BottomNav";
 import Header from "./components/Header";
 import InstallPrompt from "./components/InstallPrompt";
+import VerifyLogin from './pages/VerifyLogin';
+
 
 function AppRoutes() {
   const location = useLocation();
@@ -50,6 +52,7 @@ function AppRoutes() {
         <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/product/:id" element={<ProductPage />} />
         <Route path="/track-order" element={<TrackOrder />} />
+        <Route path="/verify-login" element={<VerifyLogin />} />
 
         {/* Protected routes */}
         <Route element={<ProtectedRoute />}>

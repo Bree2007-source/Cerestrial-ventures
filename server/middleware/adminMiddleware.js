@@ -1,44 +1,24 @@
-import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
+import { protect } from './authMiddleware.js';
 
-// Middleware to protect routes and verify the user's token
-export const protect = async (req, res, next) => {
-    let token;
+// Re-export protect so routes that import it from here also work
+export { protect };
 
-    if (
-        req.headers.authorization &&
-        req.headers.authorization.startsWith('Bearer')
-    ) {
-        try {
-            // Get token from header
-            token = req.headers.authorization.split(' ')[1];
-
-            // Verify token
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-            // Get user from the token payload and attach it to the request object
-            req.user = await User.findById(decoded.id).select('-password');
-            if (!req.user) {
-                return res.status(401).json({ message: 'Not authorized, user not found' });
-            }
-
-            return next();
-        } catch (error) {
-            console.error('Token verification error:', error);
-            return res.status(401).json({ message: 'Not authorized, token failed' });
-        }
-    }
-
-    if (!token) {
-        return res.status(401).json({ message: 'Not authorized, no token provided' });
-    }
+export const admin = (req, res, next) => {
+  if (!req.user) {
+    return protect(req, res, () => checkAdmin(req, res, next));
+  }
+  checkAdmin(req, res, next);
 };
 
-// Middleware to restrict access only to users with an admin role
-export const adminOnly = (req, res, next) => {
-    if (req.user && req.user.isAdmin) {
-        next();
-    } else {
-        res.status(403).json({ message: 'Access denied: Admin resource only' });
-    }
-};
+// Alias — some routes import it as adminOnly
+export const adminOnly = admin;
+
+function checkAdmin(req, res, next) {
+  if (req.user?.isAdmin) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied. Admin privileges required.',
+  });
+}
