@@ -4,6 +4,7 @@ import bcrypt         from 'bcryptjs';
 import cookieParser   from 'cookie-parser';
 
 import User           from '../models/User.js';
+import Driver         from '../models/Driver.js';
 import Notification   from '../models/Notification.js';
 import LoginOtp       from '../models/LoginOtp.js';
 import TrustedDevice  from '../models/TrustedDevice.js';
@@ -18,7 +19,6 @@ import { sendOtpSms }                   from '../utils/sendSms.js';
 
 const router = express.Router();
 
-// ── Helper: safe user payload ─────────────────────────────────────────────
 function userPayload(user) {
   return {
     _id:                     user._id,
@@ -27,6 +27,7 @@ function userPayload(user) {
     phone:                   user.phone,
     phoneNumber:             user.phoneNumber,
     isAdmin:                 user.isAdmin,
+    role:                    user.isAdmin ? 'admin' : 'customer',
     accountType:             user.accountType,
     businessInfo:            user.businessInfo,
     notificationPreferences: user.notificationPreferences,
@@ -35,9 +36,20 @@ function userPayload(user) {
   };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// POST /api/auth/register
-// ═══════════════════════════════════════════════════════════════════════════
+function driverPayload(driver) {
+  return {
+    _id:          driver._id,
+    name:         driver.name,
+    email:        driver.email,
+    phone:        driver.phone,
+    role:         'driver',
+    vehicleType:  driver.vehicleType,
+    status:       driver.status,
+    isActive:     driver.isActive,
+    createdAt:    driver.createdAt,
+  };
+}
+
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password, phone, accountType, businessInfo } = req.body;
@@ -79,9 +91,6 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// POST /api/auth/login  — direct login, no OTP
-// ═══════════════════════════════════════════════════════════════════════════
 router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -89,33 +98,73 @@ router.post('/login', loginLimiter, async (req, res) => {
     if (!email || !password)
       return res.status(400).json({ success: false, message: 'Email and password are required.' });
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
+    const normalizedEmail = email.toLowerCase().trim();
 
-    if (!user || !(await user.matchPassword(password))) {
-      if (user) await logSecurityEvent(user._id, 'LOGIN_FAILURE', req);
-      return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
+
+    if (user) {
+      if (!(await user.matchPassword(password))) {
+        await logSecurityEvent(user._id, 'LOGIN_FAILURE', req);
+        return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+      }
+
+      if (user.isDisabled)
+        return res.status(403).json({ success: false, message: 'This account has been disabled. Please contact support.' });
+
+      const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+      await logSecurityEvent(user._id, 'LOGIN_SUCCESS', req, { method: 'direct' });
+
+      return res.json({
+        success: true,
+        token,
+        user: userPayload(user),
+      });
     }
 
-    if (user.isDisabled)
-      return res.status(403).json({ success: false, message: 'This account has been disabled. Please contact support.' });
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    await logSecurityEvent(user._id, 'LOGIN_SUCCESS', req, { method: 'direct' });
-
-    return res.json({
-      success: true,
-      token,
-      user: userPayload(user),
-    });
+    return res.status(401).json({ success: false, message: 'Invalid email or password.' });
   } catch (err) {
     console.error('[Login]', err);
     res.status(500).json({ success: false, message: 'Server error. Please try again.' });
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PUT /api/auth/update  — update own profile
-// ═══════════════════════════════════════════════════════════════════════════
+router.post('/driver-login', loginLimiter, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password)
+      return res.status(400).json({ success: false, message: 'Email and password are required.' });
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const driver = await Driver.findOne({ email: normalizedEmail });
+
+    if (!driver) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+    }
+
+    const isMatch = await bcrypt.compare(password, driver.password);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+    }
+
+    if (!driver.isActive) {
+      return res.status(403).json({ success: false, message: 'This driver account has been deactivated. Please contact admin.' });
+    }
+
+    const token = jwt.sign({ id: driver._id, role: 'driver' }, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+    return res.json({
+      success: true,
+      token,
+      user: driverPayload(driver),
+    });
+  } catch (err) {
+    console.error('[DriverLogin]', err);
+    res.status(500).json({ success: false, message: 'Server error. Please try again.' });
+  }
+});
+
 router.put('/update', protect, async (req, res) => {
   try {
     const { name, email, phone, phoneNumber, accountType, businessInfo, notificationPreferences } = req.body;

@@ -21,6 +21,7 @@ import paymentRoutes from './routes/payment.js'
 import notificationRoutes from './routes/notificationRoutes.js'
 import passwordResetRoutes from './routes/passwordResetRoutes.js'
 import securityRoutes from './routes/securityRoutes.js'
+import driverRoutes from './routes/driverRoutes.js'
 
 import User from './models/User.js'
 
@@ -33,12 +34,24 @@ const httpServer = http.createServer(app)
 const PORT = process.env.PORT || 5000
 
 // ── Allowed origins ────────────────────────────────────────────────────────
+// Netlify entries kept even though that account is over its limit right
+// now — harmless to leave them, and it means nothing breaks again if you
+// resume that account later. Vercel entries added for the new frontend
+// host: one for the production domain, one regex covering every preview
+// deploy URL Vercel auto-generates per branch/PR.
+//
+// IMPORTANT: this assumes the Vercel project is named "cerestrial-ventures".
+// If you name it anything else when creating the project, this regex won't
+// match and every request from the live site will get CORS-blocked — swap
+// "cerestrial-ventures" below for whatever the actual project name is.
 const allowedOrigins = [
   /^http:\/\/localhost(:\d+)?$/,
   'https://aesthetic-chimera-0d58ee.netlify.app',
   'https://cerestrial-ventures.netlify.app',
   /^https:\/\/[a-z0-9]+--cerestrial-ventures\.netlify\.app$/,
   /^https:\/\/[a-z0-9]+-cerestrial-ventures\.netlify\.app$/,
+  // Vercel — production domain + every preview deploy Vercel generates
+  /^https:\/\/cerestrial-ventures(-[a-z0-9]+)?(-[a-z0-9]+)?\.vercel\.app$/,
 ]
 
 const corsOptions = {
@@ -52,13 +65,46 @@ const io = new Server(httpServer, { cors: corsOptions })
 app.set('io', io)
 
 io.on('connection', (socket) => {
-  console.log('🟢 Customer connected via socket:', socket.id)
+  console.log('🟢 Socket connected:', socket.id)
+
+  // Customer tracks their order
   socket.on('join_order', (orderId) => {
     socket.join(orderId)
-    console.log(`📦 Socket ${socket.id} tracking order: ${orderId}`)
+    console.log(`📦 Tracking order: ${orderId}`)
   })
+
+  // Driver joins their room
+  socket.on('join_driver', (driverId) => {
+    socket.join(`driver_${driverId}`)
+    console.log(`🚗 Driver ${driverId} joined`)
+  })
+
+  // Admin joins admin room
+  socket.on('join_admin', () => {
+    socket.join('admin_room')
+    console.log(`🛡️ Admin joined`)
+  })
+
+  // Driver updates location
+  socket.on('driver_location_update', (data) => {
+    const { driverId, lat, lng, orderId } = data
+    // Broadcast to customer tracking this order
+    if (orderId) {
+      io.to(orderId).emit('driver_location', { lat, lng, driverId })
+    }
+    // Broadcast to admin
+    io.to('admin_room').emit('driver_location_update', { driverId, lat, lng })
+  })
+
+  // Order status update
+  socket.on('order_status_update', (data) => {
+    const { orderId, status, driverName } = data
+    io.to(orderId).emit('order_status_changed', { orderId, status, driverName })
+    io.to('admin_room').emit('order_updated', { orderId, status })
+  })
+
   socket.on('disconnect', () => {
-    console.log('🔴 Customer disconnected:', socket.id)
+    console.log('🔴 Disconnected:', socket.id)
   })
 })
 
@@ -74,7 +120,7 @@ app.get('/', (req, res) => {
   res.send('🚀 Cerestrial Ventures API is running!')
 })
 
-// ── Request logger (debug) ─────────────────────────────────────────────────
+// ── Request logger ─────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`)
   next()
@@ -92,6 +138,7 @@ app.use('/api/payments',       paymentRoutes)
 app.use('/api/notifications',  notificationRoutes)
 app.use('/api/password-reset', passwordResetRoutes)
 app.use('/api/security',       securityRoutes)
+app.use('/api/drivers',        driverRoutes)
 
 // ── Global error handler ───────────────────────────────────────────────────
 app.use((err, req, res, next) => {
@@ -109,7 +156,7 @@ app.use((err, req, res, next) => {
 // ── Admin bootstrap ────────────────────────────────────────────────────────
 const ensureAdminUser = async () => {
   if (!process.env.ADMIN_PASSWORD) {
-    console.warn('⚠️  ADMIN_PASSWORD not set in .env — skipping admin bootstrap.')
+    console.warn('⚠️  ADMIN_PASSWORD not set — skipping admin bootstrap.')
     return
   }
   try {
@@ -122,7 +169,7 @@ const ensureAdminUser = async () => {
         isAdmin:  true,
       })
       await admin.save()
-      console.log('✅ Default admin user created: admin@cerestrial.com')
+      console.log('✅ Default admin created: admin@cerestrial.com')
     } else if (!existing.isAdmin) {
       existing.isAdmin = true
       await existing.save()
@@ -146,7 +193,7 @@ mongoose
 
     httpServer.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
-        console.error(`❌ Port ${PORT} is already in use.`)
+        console.error(`❌ Port ${PORT} already in use.`)
         return process.exit(1)
       }
       console.error('❌ HTTP server error:', err)

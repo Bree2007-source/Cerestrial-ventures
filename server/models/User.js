@@ -32,6 +32,15 @@ const userSchema = new mongoose.Schema(
 
     // Wishlist
     wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
+    
+
+    // GPS location (captured silently at login)
+    location: {
+      lat:       { type: Number, default: null },
+      lng:       { type: Number, default: null },
+      address:   { type: String, default: null },
+      updatedAt: { type: Date,   default: null },
+    },
 
     // ── Security fields (required for 2FA system) ──────────────────────────
     passwordChangedAt: { type: Date,    default: null },

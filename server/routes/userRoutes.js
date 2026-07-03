@@ -28,6 +28,7 @@ router.get('/profile', protect, async (req, res) => {
       businessInfo:            user.businessInfo || null,
       notificationPreferences: user.notificationPreferences,
       wishlist:                user.wishlist,
+      location:                user.location || null,   // ← include saved location
       createdAt:               user.createdAt,
       updatedAt:               user.updatedAt,
     })
@@ -56,11 +57,36 @@ router.put('/profile', protect, async (req, res) => {
       phone:        updated.phone,
       accountType:  updated.accountType,
       businessInfo: updated.businessInfo,
+      location:     updated.location || null,
       createdAt:    updated.createdAt,
       updatedAt:    updated.updatedAt,
     })
   } catch (err) {
     console.error('PUT /profile error:', err)
+    res.status(500).json({ message: 'Server error' })
+  }
+})
+
+// ── PATCH /api/users/location ──────────────────────────────────────────────
+// Called silently after login/register to store the customer's GPS location.
+// Also used at checkout when the customer refreshes or moves the pin.
+router.patch('/location', protect, async (req, res) => {
+  try {
+    const { lat, lng, address } = req.body
+    if (lat === undefined || lng === undefined) {
+      return res.status(400).json({ message: 'lat and lng are required' })
+    }
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { location: { lat, lng, address: address || `${lat}, ${lng}`, updatedAt: new Date() } },
+      { new: true }
+    ).select('-password')
+    res.json({
+      message:  'Location saved',
+      location: user.location,
+    })
+  } catch (err) {
+    console.error('PATCH /location error:', err)
     res.status(500).json({ message: 'Server error' })
   }
 })

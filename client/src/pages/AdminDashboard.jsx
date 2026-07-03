@@ -1,13 +1,14 @@
 /**
  * Cerestrial Ventures — Admin Dashboard
- * Full replacement for the existing AdminDashboard.jsx
  *
  * Features:
  *  - Overview with real KPIs + charts
- *  - Orders management with full status workflow + search/filter
+ *  - Orders management with full status workflow + search/filter + driver assignment
+ *  - Bulk driver assignment (checkboxes + "Assign Selected Orders")
  *  - Inventory with add/edit/delete + low-stock alerts
  *  - Product Sales Summary (daily/weekly/monthly/custom)
  *  - Customers list
+ *  - Drivers tab (AdminDrivers.jsx)
  *  - Promotions broadcast
  *  - Real-time polling (upgradeable to WebSocket)
  *  - Fully responsive — mobile first, no horizontal scroll
@@ -16,6 +17,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API_BASE_URL from '../config';
+import socket from '../socket';
+import AdminDrivers from './AdminDrivers';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const fmt    = (n) => `KSh ${Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 0 })}`;
@@ -40,6 +43,9 @@ const getStatusStyle = (status) => {
   const m = STATUS_META[status] || { color: '#64748b', bg: '#f1f5f9', label: status };
   return { backgroundColor: m.bg, color: m.color, padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', display: 'inline-block' };
 };
+
+// An order can be bulk-selected only if it has no driver yet and isn't finished.
+const isBulkSelectable = (o) => !o.driver && o.status !== 'Cancelled' && o.status !== 'Delivered';
 
 const getToken  = ()      => localStorage.getItem('cv-token') || '';
 const authHdr   = ()      => ({ Authorization: `Bearer ${getToken()}` });
@@ -126,6 +132,127 @@ const iStyle = {
 };
 const lStyle = { display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 5 };
 
+// ─── Driver assignment helpers ─────────────────────────────────────────────────
+const DRIVER_STATUS_STYLE = {
+  'Available':   { bg: '#dcfce7', color: '#14532d' },
+  'On Delivery': { bg: '#ffedd5', color: '#9a3412' },
+  'Offline':     { bg: '#f1f5f9', color: '#475569' },
+};
+
+/** Assign / reassign driver modal — opens from the Orders tab */
+const AssignDriverModal = ({ order, drivers, onAssign, onClose, assigning }) => {
+  const [selectedId, setSelectedId] = useState(order.driver?._id || '');
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 12, width: '100%', maxWidth: 460, maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 15, color: '#0f172a' }}>{order.driver ? 'Reassign Driver' : 'Assign Driver'}</h3>
+            <p style={{ margin: '3px 0 0', fontSize: 12, color: '#64748b' }}>Order #{order._id.slice(-6).toUpperCase()} — {order.customerName}</p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: '#94a3b8', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ overflowY: 'auto', padding: '12px 20px', flex: 1 }}>
+          {drivers.length === 0 ? (
+            <p style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>No drivers found. Add one in the Drivers tab.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0' }}>
+              {drivers.map(d => {
+                const ds = DRIVER_STATUS_STYLE[d.status] || DRIVER_STATUS_STYLE.Offline;
+                const isSelected   = selectedId === d._id;
+                const isCurrent    = order.driver?._id === d._id;
+                const isSelectable = (d.status === 'Available' && d.isActive) || isCurrent;
+                return (
+                  <label key={d._id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 8, border: `1.5px solid ${isSelected ? '#166534' : '#e2e8f0'}`, background: isSelected ? '#f0fdf4' : 'white', cursor: isSelectable ? 'pointer' : 'not-allowed', opacity: isSelectable ? 1 : .55 }}>
+                    <input type="radio" name="driver" value={d._id} checked={isSelected} disabled={!isSelectable} onChange={() => setSelectedId(d._id)} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: 13, color: '#1e293b' }}>{d.name}</span>
+                        {isCurrent && <span style={{ fontSize: 10, fontWeight: 700, color: '#166534', background: '#dcfce7', padding: '1px 7px', borderRadius: 999 }}>Currently assigned</span>}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{d.phone}</div>
+                    </div>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ds.bg, color: ds.color, whiteSpace: 'nowrap' }}>{d.status}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: '14px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', color: '#334155', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Cancel</button>
+          <button
+            onClick={() => onAssign(selectedId)}
+            disabled={!selectedId || assigning || selectedId === order.driver?._id}
+            style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: '#166534', color: 'white', cursor: (!selectedId || assigning) ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, opacity: (!selectedId || assigning || selectedId === order.driver?._id) ? .5 : 1 }}
+          >
+            {assigning ? 'Assigning…' : order.driver ? 'Reassign' : 'Assign'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/** Bulk-assign modal — pick one driver for N selected orders at once */
+const BulkAssignModal = ({ count, drivers, onAssign, onClose, assigning }) => {
+  const [selectedId, setSelectedId] = useState('');
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 12, width: '100%', maxWidth: 460, maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 15, color: '#0f172a' }}>Assign driver to {count} order{count === 1 ? '' : 's'}</h3>
+            <p style={{ margin: '3px 0 0', fontSize: 12, color: '#64748b' }}>This driver's delivery queue will be recalculated automatically.</p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, color: '#94a3b8', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ overflowY: 'auto', padding: '12px 20px', flex: 1 }}>
+          {drivers.length === 0 ? (
+            <p style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>No drivers found. Add one in the Drivers tab.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0' }}>
+              {drivers.map(d => {
+                const ds = DRIVER_STATUS_STYLE[d.status] || DRIVER_STATUS_STYLE.Offline;
+                const isSelected   = selectedId === d._id;
+                const isSelectable = d.isActive && d.status !== 'Offline';
+                return (
+                  <label key={d._id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 8, border: `1.5px solid ${isSelected ? '#166534' : '#e2e8f0'}`, background: isSelected ? '#f0fdf4' : 'white', cursor: isSelectable ? 'pointer' : 'not-allowed', opacity: isSelectable ? 1 : .55 }}>
+                    <input type="radio" name="bulk-driver" value={d._id} checked={isSelected} disabled={!isSelectable} onChange={() => setSelectedId(d._id)} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: '#1e293b' }}>{d.name}</div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                        {d.phone}{d.status === 'On Delivery' ? ' · queue will be extended' : ''}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ds.bg, color: ds.color, whiteSpace: 'nowrap' }}>{d.status}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: '14px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', color: '#334155', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Cancel</button>
+          <button
+            onClick={() => onAssign(selectedId)}
+            disabled={!selectedId || assigning}
+            style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: '#166534', color: 'white', cursor: (!selectedId || assigning) ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, opacity: (!selectedId || assigning) ? .5 : 1 }}
+          >
+            {assigning ? 'Assigning…' : `Assign ${count} order${count === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 const AdminDashboard = () => {
   const navigate = useNavigate();
@@ -138,6 +265,16 @@ const AdminDashboard = () => {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast]     = useState(null);
+
+  // Driver assignment
+  const [drivers, setDrivers]         = useState([]);
+  const [modalOrder, setModalOrder]   = useState(null);
+  const [assigningId, setAssigningId] = useState(null);
+
+  // Bulk driver assignment
+  const [selectedOrderIds, setSelectedOrderIds] = useState(new Set());
+  const [showBulkModal, setShowBulkModal]       = useState(false);
+  const [bulkAssigning, setBulkAssigning]       = useState(false);
 
   // Orders tab state
   const [orderSearch, setOrderSearch]   = useState('');
@@ -208,13 +345,35 @@ const AdminDashboard = () => {
     } catch {}
   }, []);
 
+  const fetchDrivers = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/drivers`, { headers: authHdr() });
+      if (r.ok) setDrivers(await r.json());
+    } catch {}
+  }, []);
+
   useEffect(() => {
-    Promise.all([fetchOrders(), fetchProducts(), fetchAnalytics(), fetchCustomers()])
+    Promise.all([fetchOrders(), fetchProducts(), fetchAnalytics(), fetchCustomers(), fetchDrivers()])
       .finally(() => setLoading(false));
+
+    const refreshDashboard = () => {
+      fetchOrders();
+      fetchProducts();
+      fetchAnalytics();
+      fetchDrivers();
+    };
+
+    socket.on('order_updated', refreshDashboard);
+    socket.on('driver_status_changed', refreshDashboard);
+
     // Poll every 30 s for real-time feel (replace with WebSocket when ready)
-    const poll = setInterval(() => { fetchOrders(); fetchAnalytics(); }, 30000);
-    return () => clearInterval(poll);
-  }, [fetchOrders, fetchProducts, fetchAnalytics, fetchCustomers]);
+    const poll = setInterval(() => { refreshDashboard(); }, 30000);
+    return () => {
+      socket.off('order_updated', refreshDashboard);
+      socket.off('driver_status_changed', refreshDashboard);
+      clearInterval(poll);
+    };
+  }, [fetchOrders, fetchProducts, fetchAnalytics, fetchCustomers, fetchDrivers]);
 
   // ── Sales summary ──────────────────────────────────────────────────────────
   const computeSalesRange = useCallback(() => {
@@ -307,6 +466,8 @@ const AdminDashboard = () => {
   });
   const paginatedOrders = filteredOrders.slice((orderPage - 1) * ORDER_PAGE_SIZE, orderPage * ORDER_PAGE_SIZE);
   const totalPages      = Math.ceil(filteredOrders.length / ORDER_PAGE_SIZE);
+  const pageEligibleIds       = paginatedOrders.filter(isBulkSelectable).map(o => o._id);
+  const eligibleFilteredCount = filteredOrders.filter(isBulkSelectable).length;
 
   // ── Inventory filtering ────────────────────────────────────────────────────
   const categories     = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
@@ -325,6 +486,83 @@ const AdminDashboard = () => {
       if (r.ok) { await fetchOrders(); showToast(`Status updated to "${status}"`); }
       else showToast('Failed to update status', 'error');
     } catch { showToast('Network error', 'error'); }
+  };
+
+  // ── Driver assignment ──────────────────────────────────────────────────────
+  const handleAssignDriver = async (orderId, driverId) => {
+    if (!driverId) return;
+    setAssigningId(orderId);
+    try {
+      const r = await fetch(`${API_BASE_URL}/orders/${orderId}/assign-driver`, {
+        method: 'PATCH', headers: jsonHdr(), body: JSON.stringify({ driverId }),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        await fetchOrders();
+        await fetchDrivers();
+        setModalOrder(null);
+        showToast('Driver assigned');
+      } else showToast(d.message || 'Could not assign driver', 'error');
+    } catch { showToast('Network error', 'error'); }
+    finally { setAssigningId(null); }
+  };
+
+  const handleRemoveDriver = async (orderId) => {
+    if (!window.confirm('Remove the assigned driver from this order?')) return;
+    try {
+      const r = await fetch(`${API_BASE_URL}/orders/${orderId}/unassign-driver`, { method: 'PATCH', headers: jsonHdr() });
+      const d = await r.json();
+      if (r.ok) { await fetchOrders(); await fetchDrivers(); showToast('Driver removed'); }
+      else showToast(d.message || 'Could not remove driver', 'error');
+    } catch { showToast('Network error', 'error'); }
+  };
+
+  // ── Bulk driver assignment ─────────────────────────────────────────────────
+  const toggleSelectOrder = (id) => {
+    setSelectedOrderIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllOnPage = () => {
+    setSelectedOrderIds(prev => {
+      const next = new Set(prev);
+      const allSelected = pageEligibleIds.length > 0 && pageEligibleIds.every(id => next.has(id));
+      pageEligibleIds.forEach(id => { if (allSelected) next.delete(id); else next.add(id); });
+      return next;
+    });
+  };
+
+  const selectAllFilteredEligible = () => {
+    setSelectedOrderIds(prev => {
+      const next = new Set(prev);
+      filteredOrders.filter(isBulkSelectable).forEach(o => next.add(o._id));
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedOrderIds(new Set());
+
+  const handleBulkAssign = async (driverId) => {
+    if (!driverId || selectedOrderIds.size === 0) return;
+    setBulkAssigning(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/orders/bulk-assign`, {
+        method: 'PATCH', headers: jsonHdr(),
+        body: JSON.stringify({ orderIds: Array.from(selectedOrderIds), driverId }),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        await fetchOrders();
+        await fetchDrivers();
+        setShowBulkModal(false);
+        clearSelection();
+        showToast(`${d.assignedCount} order${d.assignedCount === 1 ? '' : 's'} assigned to ${d.driver?.name || 'driver'}${d.skipped?.length ? ` (${d.skipped.length} skipped)` : ''}`);
+      } else showToast(d.message || 'Bulk assignment failed', 'error');
+    } catch { showToast('Network error', 'error'); }
+    finally { setBulkAssigning(false); }
   };
 
   // ── Product CRUD ───────────────────────────────────────────────────────────
@@ -423,6 +661,7 @@ const AdminDashboard = () => {
     { key: 'inventory',  icon: '📦', label: `Inventory (${products.length})` },
     { key: 'sales',      icon: '📈', label: 'Sales Summary' },
     { key: 'customers',  icon: '👥', label: `Customers (${customers.length})` },
+    { key: 'drivers',    icon: '🚴', label: 'Drivers' },
     { key: 'promotions', icon: '📣', label: 'Promotions' },
   ];
 
@@ -594,22 +833,55 @@ const AdminDashboard = () => {
               {filteredOrders.length !== orders.length && ` (filtered from ${orders.length})`}
             </div>
 
+            {selectedOrderIds.size > 0 && (
+              <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10, padding: '10px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#166534' }}>{selectedOrderIds.size} order{selectedOrderIds.size === 1 ? '' : 's'} selected</span>
+                <button onClick={() => setShowBulkModal(true)} style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: '#166534', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>
+                  🚚 Assign Selected Orders
+                </button>
+                <button onClick={clearSelection} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid #cbd5e1', background: 'white', color: '#334155', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                  Clear selection
+                </button>
+                {eligibleFilteredCount > selectedOrderIds.size && (
+                  <button onClick={selectAllFilteredEligible} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#1d4ed8', cursor: 'pointer', fontSize: 12, fontWeight: 600, textDecoration: 'underline' }}>
+                    Select all {eligibleFilteredCount} unassigned orders (matching filters)
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Orders table */}
             <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 720 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 760 }}>
                   <thead>
                     <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                      {['Order', 'Customer', 'Items', 'Total', 'Location', 'Date', 'Status', 'Actions'].map(h => (
+                      <th style={{ padding: '12px 10px', width: 36 }}>
+                        <input
+                          type="checkbox"
+                          checked={pageEligibleIds.length > 0 && pageEligibleIds.every(id => selectedOrderIds.has(id))}
+                          onChange={toggleSelectAllOnPage}
+                          disabled={pageEligibleIds.length === 0}
+                          style={{ cursor: pageEligibleIds.length ? 'pointer' : 'default' }}
+                        />
+                      </th>
+                      {['Order', 'Customer', 'Items', 'Total', 'Location', 'Date', 'Status', 'Assigned Driver', 'Actions'].map(h => (
                         <th key={h} style={{ padding: '12px 14px', textAlign: 'left', color: '#475569', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {paginatedOrders.length === 0 ? (
-                      <tr><td colSpan={8} style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>No orders match your filters.</td></tr>
+                      <tr><td colSpan={10} style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>No orders match your filters.</td></tr>
                     ) : paginatedOrders.map(o => (
                       <tr key={o._id} className="row-hover" style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '12px 10px' }}>
+                          {isBulkSelectable(o) ? (
+                            <input type="checkbox" checked={selectedOrderIds.has(o._id)} onChange={() => toggleSelectOrder(o._id)} style={{ cursor: 'pointer' }} />
+                          ) : (
+                            <span style={{ display: 'inline-block', width: 14 }} />
+                          )}
+                        </td>
                         <td style={{ padding: '12px 14px', fontFamily: 'monospace', fontWeight: 700, color: '#166534', fontSize: 12 }}>
                           #{o._id.slice(-6).toUpperCase()}
                         </td>
@@ -647,6 +919,25 @@ const AdminDashboard = () => {
                           >
                             {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                           </select>
+                        </td>
+                        <td style={{ padding: '12px 14px', minWidth: 160 }}>
+                          {o.driver ? (
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a' }}>{o.driver.name}</div>
+                              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>{o.driver.phone}</div>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button onClick={() => setModalOrder(o)} style={{ padding: '4px 9px', borderRadius: 6, border: '1px solid #cbd5e1', background: 'white', color: '#334155', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>Reassign</button>
+                                {o.status === 'Assigned to Driver' && (
+                                  <button onClick={() => handleRemoveDriver(o._id)} style={{ padding: '4px 9px', borderRadius: 6, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>Remove</button>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <span style={{ fontSize: 12, color: '#94a3b8', display: 'block', marginBottom: 6 }}>Not assigned</span>
+                              <button onClick={() => setModalOrder(o)} style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: '#166534', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>Assign Driver</button>
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '12px 14px' }}>
                           {o.latitude && o.longitude && (
@@ -959,6 +1250,9 @@ const AdminDashboard = () => {
           </div>
         )}
 
+        {/* ═══════════════════════════════════════ DRIVERS ═══════════════════ */}
+        {tab === 'drivers' && <AdminDrivers />}
+
         {/* ═══════════════════════════════════════ PROMOTIONS ════════════════ */}
         {tab === 'promotions' && (
           <div style={{ maxWidth: 680 }}>
@@ -984,6 +1278,28 @@ const AdminDashboard = () => {
         )}
 
       </div>
+
+      {/* ── Assign Driver Modal ── */}
+      {modalOrder && (
+        <AssignDriverModal
+          order={modalOrder}
+          drivers={drivers}
+          assigning={assigningId === modalOrder._id}
+          onAssign={(driverId) => handleAssignDriver(modalOrder._id, driverId)}
+          onClose={() => setModalOrder(null)}
+        />
+      )}
+
+      {/* ── Bulk Assign Driver Modal ── */}
+      {showBulkModal && (
+        <BulkAssignModal
+          count={selectedOrderIds.size}
+          drivers={drivers}
+          assigning={bulkAssigning}
+          onAssign={handleBulkAssign}
+          onClose={() => setShowBulkModal(false)}
+        />
+      )}
 
       {/* ── Toast ── */}
       {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}

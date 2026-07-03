@@ -1,44 +1,47 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API_BASE_URL from '../config';
+import socket from '../socket';
 
 const GREEN = '#15803d';
 
 const statusSteps = [
-  'Order Received', 'Payment Confirmed', 'Processing Order',
-  'Packed', 'Out for Delivery', 'Delivered'
+  'Pending', 'Assigned to Driver', 'Driver On The Way', 'Arrived', 'Delivered'
 ];
 
 const statusColors = {
-  'Delivered':         { bg: '#dcfce7', color: '#166534' },
-  'Processing Order':  { bg: '#fef9c3', color: '#854d0e' },
-  'Processing':        { bg: '#fef9c3', color: '#854d0e' },
-  'Pending':           { bg: '#fef9c3', color: '#854d0e' },
-  'Order Received':    { bg: '#dbeafe', color: '#1e40af' },
-  'Payment Confirmed': { bg: '#dbeafe', color: '#1e40af' },
-  'Packed':            { bg: '#ede9fe', color: '#5b21b6' },
-  'Out for Delivery':  { bg: '#ffedd5', color: '#9a3412' },
-  'Cancelled':         { bg: '#fee2e2', color: '#991b1b' },
+  'Pending':            { bg: '#fef9c3', color: '#854d0e' },
+  'Assigned to Driver': { bg: '#dbeafe', color: '#1e40af' },
+  'Driver On The Way':  { bg: '#ffedd5', color: '#9a3412' },
+  'Arrived':            { bg: '#ede9fe', color: '#5b21b6' },
+  'Delivered':          { bg: '#dcfce7', color: '#166534' },
+  'Cancelled':          { bg: '#fee2e2', color: '#991b1b' },
 };
 
-const ALL_STATUSES = ['All', 'Order Received', 'Payment Confirmed', 'Processing Order', 'Packed', 'Out for Delivery', 'Delivered', 'Cancelled'];
+const ALL_STATUSES = ['All', 'Pending', 'Assigned to Driver', 'Driver On The Way', 'Arrived', 'Delivered', 'Cancelled'];
 
 export default function Orders() {
-  const [orders, setOrders]           = useState([]);
-  const [loading, setLoading]         = useState(true);
-  const [error, setError]             = useState(null);
-  const [search, setSearch]           = useState('');
+  const [orders, setOrders]             = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState(null);
+  const [search, setSearch]             = useState('');
   const [filterStatus, setFilterStatus] = useState('All');
-  const [receipt, setReceipt]         = useState(null);
-  const [reordering, setReordering]   = useState(null);
-  const receiptRef                    = useRef();
-  const navigate                      = useNavigate();
+  const [receipt, setReceipt]           = useState(null);
+  const [reordering, setReordering]     = useState(null);
+  const [liveUpdate, setLiveUpdate]     = useState(null);
+  const receiptRef                      = useRef();
+  const navigate                        = useNavigate();
 
+  // ── Fetch orders on mount ─────────────────────────────────────────
   useEffect(() => {
     const fetchOrders = async () => {
       try {
         const token = localStorage.getItem('cv-token') || localStorage.getItem('token');
-        if (!token) { setError('Please log in to view orders.'); setLoading(false); return; }
+        if (!token) {
+          setError('Please log in to view orders.');
+          setLoading(false);
+          return;
+        }
         const res = await fetch(`${API_BASE_URL}/orders/my`, {
           headers: { Authorization: `Bearer ${token}` }
         });
@@ -54,6 +57,42 @@ export default function Orders() {
     fetchOrders();
   }, []);
 
+  // ── Real-time Socket.io updates ───────────────────────────────────
+  // This runs whenever orders change — joins each order's room
+  // so we receive live status updates from the backend
+  useEffect(() => {
+    if (orders.length === 0) return;
+
+    // Join a socket room for each order
+    orders.forEach(order => {
+      socket.emit('join_order', order._id);
+    });
+
+    // Listen for status changes from the server
+    const handleStatusChange = ({ orderId, status, driverName }) => {
+      // Update the specific order in our list
+      setOrders(prev =>
+        prev.map(order =>
+          order._id === orderId
+            ? { ...order, status, driverName: driverName || order.driverName }
+            : order
+        )
+      );
+
+      // Show a live update notification banner
+      setLiveUpdate({ orderId, status });
+      setTimeout(() => setLiveUpdate(null), 4000);
+    };
+
+    socket.on('order_status_changed', handleStatusChange);
+
+    // Cleanup — remove listener when component unmounts
+    return () => {
+      socket.off('order_status_changed', handleStatusChange);
+    };
+  }, [orders.length]);
+
+  // ── Filter orders ─────────────────────────────────────────────────
   const filtered = orders.filter(o => {
     const matchStatus = filterStatus === 'All' || o.status === filterStatus;
     const q = search.toLowerCase();
@@ -64,10 +103,10 @@ export default function Orders() {
     return matchStatus && matchSearch;
   });
 
+  // ── Reorder handler ───────────────────────────────────────────────
   const handleReorder = async (order) => {
     setReordering(order._id);
     try {
-      // Add items to cart via localStorage
       const cart = JSON.parse(localStorage.getItem('cart') || '[]');
       order.items.forEach(item => {
         const existing = cart.find(c => c._id === item.productId || c.name === item.name);
@@ -93,6 +132,7 @@ export default function Orders() {
     }
   };
 
+  // ── PDF download ──────────────────────────────────────────────────
   const handleDownloadPDF = async (orderId) => {
     try {
       const token = localStorage.getItem('cv-token') || localStorage.getItem('token');
@@ -112,6 +152,7 @@ export default function Orders() {
     }
   };
 
+  // ── Print receipt ─────────────────────────────────────────────────
   const handlePrint = () => {
     const content = receiptRef.current?.innerHTML;
     if (!content) return;
@@ -120,9 +161,11 @@ export default function Orders() {
       <html><head><title>Receipt</title>
       <style>
         body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
-        h2 { color: #15803d; } table { width: 100%; border-collapse: collapse; }
+        h2 { color: #15803d; }
+        table { width: 100%; border-collapse: collapse; }
         th, td { padding: 8px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; }
-        th { background: #f1f5f9; } .total { font-weight: bold; font-size: 16px; }
+        th { background: #f1f5f9; }
+        .total { font-weight: bold; font-size: 16px; }
       </style></head>
       <body>${content}</body></html>
     `);
@@ -130,6 +173,7 @@ export default function Orders() {
     win.print();
   };
 
+  // ── Loading state ─────────────────────────────────────────────────
   if (loading) return (
     <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>
       <div style={{ fontSize: 40, marginBottom: 12 }}>⏳</div>
@@ -137,6 +181,7 @@ export default function Orders() {
     </div>
   );
 
+  // ── Error state ───────────────────────────────────────────────────
   if (error) return (
     <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>
       <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
@@ -148,6 +193,7 @@ export default function Orders() {
     </div>
   );
 
+  // ── Main render ───────────────────────────────────────────────────
   return (
     <div style={{ padding: '16px', maxWidth: 900, margin: '0 auto', fontFamily: 'sans-serif', paddingBottom: 100, boxSizing: 'border-box' }}>
 
@@ -175,6 +221,8 @@ export default function Orders() {
         .receipt-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
         .receipt-table th, .receipt-table td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; }
         .receipt-table th { background: #f8fafc; font-weight: 700; color: #475569; }
+        .live-banner { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); background: #166534; color: white; padding: 10px 20px; border-radius: 30px; font-size: 13px; font-weight: 700; z-index: 9999; box-shadow: 0 4px 20px rgba(0,0,0,0.2); animation: slideDown 0.3s ease; }
+        @keyframes slideDown { from { opacity: 0; transform: translateX(-50%) translateY(-20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
         input[type=text]::placeholder { color: #94a3b8; }
         @media (max-width: 480px) {
           .order-header-label { font-size: 10px; }
@@ -184,11 +232,22 @@ export default function Orders() {
         }
       `}</style>
 
+      {/* Live update notification banner */}
+      {liveUpdate && (
+        <div className="live-banner">
+          🔔 Order #{liveUpdate.orderId.slice(-6).toUpperCase()} → {liveUpdate.status}
+        </div>
+      )}
+
       {/* Header */}
       <h2 style={{ color: '#1e293b', borderBottom: `2px solid ${GREEN}`, paddingBottom: 10, marginBottom: 20, fontSize: 'clamp(18px, 4vw, 24px)' }}>
         📦 My Orders
         <span style={{ fontSize: 13, color: '#64748b', fontWeight: 400, marginLeft: 10 }}>
           ({orders.length} order{orders.length !== 1 ? 's' : ''})
+        </span>
+        {/* Live indicator */}
+        <span style={{ marginLeft: 10, fontSize: 11, backgroundColor: '#dcfce7', color: '#166534', padding: '2px 10px', borderRadius: 20, fontWeight: 600 }}>
+          🟢 Live
         </span>
       </h2>
 
@@ -239,9 +298,11 @@ export default function Orders() {
         const currentStepIndex = statusSteps.indexOf(order.status);
         const fillPercent = (Math.max(currentStepIndex, 0) / (statusSteps.length - 1)) * 92;
         const statusStyle = statusColors[order.status] || { bg: '#dbeafe', color: '#1e40af' };
+        const isCancelled = order.status === 'Cancelled';
 
         return (
-          <div key={order._id} className="order-card">
+          <div key={order._id} className="order-card"
+            style={{ borderLeft: liveUpdate?.orderId === order._id ? '4px solid #15803d' : '1px solid #e2e8f0' }}>
 
             {/* Header grid */}
             <div className="order-header-grid">
@@ -257,7 +318,7 @@ export default function Orders() {
               </div>
               <div className="order-header-cell">
                 <span className="order-header-label">Total</span>
-                <span className="order-header-value">KSh {(order.totalAmount || order.totalPrice || 0).toLocaleString()}</span>
+                <span className="order-header-value">KSh {(order.totalAmount || 0).toLocaleString()}</span>
               </div>
             </div>
 
@@ -265,12 +326,20 @@ export default function Orders() {
             <div className="order-location">
               <div style={{ fontSize: 12, fontWeight: 700, color: '#166534', marginBottom: 3 }}>📍 Delivery Location</div>
               <div style={{ fontSize: 13, color: '#334155' }}>{order.location || 'Not specified'}</div>
-              {order.latitude && order.longitude && (
+              {order.coordinates?.lat && order.coordinates?.lng && (
                 <button
-                  onClick={() => window.open(`https://www.google.com/maps?q=${order.latitude},${order.longitude}`, '_blank')}
+                  onClick={() => window.open(`https://www.google.com/maps?q=${order.coordinates.lat},${order.coordinates.lng}`, '_blank')}
                   style={{ marginTop: 5, background: 'none', border: 'none', padding: 0, color: '#1d4ed8', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
                   🗺️ View on Google Maps
                 </button>
+              )}
+              {order.driverName && (
+                <div style={{ marginTop: 8, fontSize: 13, color: '#166534' }}>
+                  🚴 <strong>Driver:</strong> {order.driverName}
+                  {order.driver?.phone && (
+                    <span style={{ color: '#64748b' }}> · {order.driver.phone}</span>
+                  )}
+                </div>
               )}
             </div>
 
@@ -279,80 +348,83 @@ export default function Orders() {
               🛒 {order.items?.map(i => `${i.name} ×${i.quantity}`).join(' · ') || 'No items'}
             </div>
 
-            {/* Progress */}
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 10 }}>Delivery Progress</div>
-            <div className="progress-wrapper">
-              <div className="progress-track">
-                <div className="progress-line-bg" />
-                <div className="progress-line-fill" style={{ width: `${fillPercent}%` }} />
-                <div className="progress-steps">
-                  {statusSteps.map((step, index) => {
-                    const isCompleted = index < currentStepIndex;
-                    const isCurrent   = index === currentStepIndex;
-                    return (
-                      <div key={step} className="progress-step">
-                        <div className="progress-dot" style={{
-                          backgroundColor: isCurrent ? '#facc15' : isCompleted ? GREEN : '#cbd5e1',
-                          border: isCurrent ? '3px solid #166534' : 'none',
-                        }}>
-                          {isCompleted ? '✓' : index + 1}
-                        </div>
-                        <span className="progress-label" style={{
-                          fontWeight: isCurrent || isCompleted ? 700 : 400,
-                          color: isCurrent ? '#166534' : isCompleted ? GREEN : '#94a3b8',
-                        }}>
-                          {step}
-                        </span>
-                      </div>
-                    );
-                  })}
+            {/* Progress bar */}
+            {!isCancelled && (
+              <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 10 }}>
+                  Delivery Progress
                 </div>
-              </div>
-            </div>
+                <div className="progress-wrapper">
+                  <div className="progress-track">
+                    <div className="progress-line-bg" />
+                    <div className="progress-line-fill" style={{ width: `${fillPercent}%` }} />
+                    <div className="progress-steps">
+                      {statusSteps.map((step, index) => {
+                        const isCompleted = index < currentStepIndex;
+                        const isCurrent   = index === currentStepIndex;
+                        return (
+                          <div key={step} className="progress-step">
+                            <div className="progress-dot" style={{
+                              backgroundColor: isCurrent ? '#facc15' : isCompleted ? GREEN : '#cbd5e1',
+                              border: isCurrent ? '3px solid #166634' : 'none',
+                            }}>
+                              {isCompleted ? '✓' : index + 1}
+                            </div>
+                            <span className="progress-label" style={{
+                              fontWeight: isCurrent || isCompleted ? 700 : 400,
+                              color: isCurrent ? '#166534' : isCompleted ? GREEN : '#94a3b8',
+                            }}>
+                              {step}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Footer */}
             <div className="order-footer">
-              <span style={{ backgroundColor: statusStyle.bg, color: statusStyle.color, padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700 }}>
-                {order.status || 'Order Received'}
+              <span style={{
+                backgroundColor: statusStyle.bg,
+                color: statusStyle.color,
+                padding: '5px 14px',
+                borderRadius: 20,
+                fontSize: 12,
+                fontWeight: 700
+              }}>
+                {order.status || 'Pending'}
               </span>
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {/* View Receipt */}
-                <button
-                  className="action-btn"
+                <button className="action-btn"
                   onClick={() => setReceipt(order)}
-                  style={{ background: '#f1f5f9', color: '#334155' }}
-                >
+                  style={{ background: '#f1f5f9', color: '#334155' }}>
                   🧾 Receipt
                 </button>
 
-                {/* Download PDF */}
-                <button
-                  className="action-btn"
+                <button className="action-btn"
                   onClick={() => handleDownloadPDF(order._id)}
-                  style={{ background: '#ede9fe', color: '#5b21b6' }}
-                >
+                  style={{ background: '#ede9fe', color: '#5b21b6' }}>
                   ⬇️ PDF
                 </button>
 
-                {/* Reorder */}
-                <button
-                  className="action-btn"
+                <button className="action-btn"
                   onClick={() => handleReorder(order)}
                   disabled={reordering === order._id}
-                  style={{ background: '#dcfce7', color: '#166534', opacity: reordering === order._id ? 0.6 : 1 }}
-                >
+                  style={{ background: '#dcfce7', color: '#166534', opacity: reordering === order._id ? 0.6 : 1 }}>
                   {reordering === order._id ? '...' : '🔁 Reorder'}
                 </button>
 
-                {/* Track */}
-                <button
-                  className="action-btn"
-                  onClick={() => navigate(`/track-order?id=${order._id}`)}
-                  style={{ background: GREEN, color: 'white' }}
-                >
-                  🗺️ Track
-                </button>
+                {!isCancelled && (
+                  <button className="action-btn"
+                    onClick={() => navigate(`/track-order?id=${order._id}`)}
+                    style={{ background: GREEN, color: 'white' }}>
+                    🗺️ Track
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -363,16 +435,21 @@ export default function Orders() {
       {receipt && (
         <div className="modal-overlay" onClick={() => setReceipt(null)}>
           <div className="modal-box" onClick={e => e.stopPropagation()}>
-
             <div ref={receiptRef}>
+
               {/* Receipt header */}
               <div style={{ textAlign: 'center', marginBottom: 20 }}>
                 <div style={{ fontSize: 32, marginBottom: 4 }}>🌾</div>
                 <h2 style={{ margin: 0, color: GREEN, fontSize: 20 }}>Cerestrial Ventures</h2>
                 <p style={{ margin: '4px 0', color: '#64748b', fontSize: 12 }}>Official Receipt</p>
+                {receipt.receiptNumber && (
+                  <p style={{ margin: '2px 0', color: '#94a3b8', fontSize: 11 }}>
+                    Receipt No: {receipt.receiptNumber}
+                  </p>
+                )}
               </div>
 
-              {/* Order info */}
+              {/* Order info grid */}
               <div style={{ background: '#f8fafc', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontSize: 13 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 16px' }}>
                   <div><span style={{ color: '#64748b' }}>Order ID:</span> <strong>#{receipt._id.slice(-6).toUpperCase()}</strong></div>
@@ -381,10 +458,17 @@ export default function Orders() {
                   <div><span style={{ color: '#64748b' }}>Status:</span> <strong style={{ color: statusColors[receipt.status]?.color || GREEN }}>{receipt.status}</strong></div>
                   <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>Customer:</span> <strong>{receipt.customerName}</strong></div>
                   <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>Phone:</span> <strong>{receipt.phone}</strong></div>
-                  {receipt.email && <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>Email:</span> <strong>{receipt.email}</strong></div>}
+                  {receipt.email && (
+                    <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>Email:</span> <strong>{receipt.email}</strong></div>
+                  )}
                   <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>Delivery:</span> <strong>{receipt.location}</strong></div>
+                  {receipt.driverName && (
+                    <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>Driver:</span> <strong>{receipt.driverName}</strong></div>
+                  )}
                   <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>Payment:</span> <strong>{receipt.paymentMethod}</strong></div>
-                  {receipt.mpesaCode && <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>M-Pesa Ref:</span> <strong>{receipt.mpesaCode}</strong></div>}
+                  {receipt.mpesaCode && (
+                    <div style={{ gridColumn: '1/-1' }}><span style={{ color: '#64748b' }}>M-Pesa Ref:</span> <strong>{receipt.mpesaCode}</strong></div>
+                  )}
                 </div>
               </div>
 
@@ -412,15 +496,34 @@ export default function Orders() {
 
               {/* Totals */}
               <div style={{ borderTop: '2px solid #e2e8f0', paddingTop: 12, marginTop: 4 }}>
-                {receipt.coupon?.code && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: '#166534' }}>
-                    <span>Coupon ({receipt.coupon.code})</span>
-                    <span>-{receipt.coupon.discountType === 'percent' ? `${receipt.coupon.value}%` : `KSh ${receipt.coupon.value}`}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: '#475569' }}>
+                  <span>Subtotal</span>
+                  <span>KSh {(receipt.items?.reduce((s, i) => s + (i.price || 0) * i.quantity, 0) || 0).toLocaleString()}</span>
+                </div>
+                {receipt.deliveryFee > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: '#475569' }}>
+                    <span>Delivery Fee</span>
+                    <span>KSh {receipt.deliveryFee.toLocaleString()}</span>
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 16, color: GREEN }}>
-                  <span>Total</span>
+                {receipt.discount > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6, color: '#166534' }}>
+                    <span>Discount</span>
+                    <span>-KSh {receipt.discount.toLocaleString()}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 16, color: GREEN, marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e2e8f0' }}>
+                  <span>Grand Total</span>
                   <span>KSh {(receipt.totalAmount || 0).toLocaleString()}</span>
+                </div>
+                <div style={{ textAlign: 'center', marginTop: 12 }}>
+                  <span style={{
+                    backgroundColor: receipt.paymentStatus === 'Paid' ? '#dcfce7' : '#fef9c3',
+                    color: receipt.paymentStatus === 'Paid' ? '#166534' : '#854d0e',
+                    padding: '4px 14px', borderRadius: 20, fontSize: 12, fontWeight: 800, letterSpacing: 1
+                  }}>
+                    {(receipt.paymentStatus || 'PENDING').toUpperCase()}
+                  </span>
                 </div>
               </div>
 
@@ -429,24 +532,18 @@ export default function Orders() {
               </p>
             </div>
 
-            {/* Modal actions */}
+            {/* Modal buttons */}
             <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
-              <button
-                onClick={handlePrint}
-                style={{ flex: 1, padding: '11px', background: '#f1f5f9', color: '#334155', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13 }}
-              >
+              <button onClick={handlePrint}
+                style={{ flex: 1, padding: 11, background: '#f1f5f9', color: '#334155', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>
                 🖨️ Print
               </button>
-              <button
-                onClick={() => handleDownloadPDF(receipt._id)}
-                style={{ flex: 1, padding: '11px', background: '#ede9fe', color: '#5b21b6', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13 }}
-              >
+              <button onClick={() => handleDownloadPDF(receipt._id)}
+                style={{ flex: 1, padding: 11, background: '#ede9fe', color: '#5b21b6', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>
                 ⬇️ Download PDF
               </button>
-              <button
-                onClick={() => setReceipt(null)}
-                style={{ flex: 1, padding: '11px', background: GREEN, color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13 }}
-              >
+              <button onClick={() => setReceipt(null)}
+                style={{ flex: 1, padding: 11, background: GREEN, color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>
                 ✓ Close
               </button>
             </div>
