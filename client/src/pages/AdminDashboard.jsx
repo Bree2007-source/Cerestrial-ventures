@@ -686,10 +686,11 @@ const AdminDashboard = () => {
         <div style={{ maxWidth: 1280, margin: '0 auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                <span style={{ fontSize: 22 }}>🛡️</span>
-                <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Cerestrial Ventures</h1>
-              </div>
+             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+  <img src="/icons/icon-96x96.png" alt="Cerestrial Ventures" style={{ width: 26, height: 26, objectFit: 'contain' }} />
+  <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Cerestrial Ventures</h1>
+</div>
+              
               <p style={{ margin: 0, opacity: .8, fontSize: 13 }}>Admin Control Panel · {new Date().toLocaleDateString('en-KE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
