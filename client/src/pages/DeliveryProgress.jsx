@@ -1,16 +1,15 @@
-import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import API_BASE_URL from '../config';
 import useSocket from '../hooks/useSocket';
 import { useAuth } from '../context/AuthContext';
+import { useDriverLocation } from '../context/DriverLocationContext';
 
 const FONT_FAMILY = "'Poppins', 'Segoe UI', sans-serif";
-const GREEN  = '#166534';
-const BORDER = '#e2e8f0';
-const INK    = '#0f172a';
-const MUTED  = '#64748b';
 
-// ── Leaflet loader — same CDN-load pattern used in MyDeliveries.jsx ────────
+// ── Leaflet loader — same CDN pattern already used in MyDeliveries.jsx /
+// MapView.jsx, duplicated locally rather than shared to match how the rest
+// of the driver panel is structured (each screen loads it once, lazily).
 let leafletLoadPromise = null;
 function loadLeaflet() {
   if (typeof window === 'undefined') return Promise.resolve(null);
@@ -36,9 +35,9 @@ function loadLeaflet() {
   return leafletLoadPromise;
 }
 
-// Haversine, km — used client-side only to decide when it's worth
-// re-querying OSRM, mirrors the 150m gate the backend uses for its own
-// recompute so we're not hammering the public demo server on every GPS tick.
+// Haversine distance in km — used only to decide whether the driver has
+// moved far enough to justify asking OSRM for a fresh route (throttling,
+// same idea as the backend's SIGNIFICANT_MOVE_KM gate).
 function distanceKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -48,7 +47,9 @@ function distanceKm(lat1, lng1, lat2, lng2) {
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-const ROUTE_REFRESH_KM = 0.05; // ~50m before re-querying OSRM
+
+const ROUTE_REFETCH_MIN_KM = 0.05;   // ~50m moved
+const ROUTE_REFETCH_MIN_MS = 20000;  // or 20s elapsed, whichever comes first
 
 const formatDuration = (min) => {
   if (min == null) return '—';
@@ -56,13 +57,19 @@ const formatDuration = (min) => {
   return `${Math.round(min)} min`;
 };
 
-const STEP_ORDER = ['Assigned to Driver', 'Driver On The Way', 'Arrived', 'Payment Confirmed', 'Delivered'];
-const STEP_LABELS = {
-  'Assigned to Driver': 'Assigned',
-  'Driver On The Way':  'On the Way',
-  Arrived:              'Arrived',
-  'Payment Confirmed':  'Payment Confirmed',
-  Delivered:            'Completed',
+const formatClockTime = (date) =>
+  date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+const T = {
+  bg: '#0B0F14',
+  panel: '#12181F',
+  panelBorder: '#232B34',
+  ink: '#F2F5F7',
+  muted: '#8B98A5',
+  green: '#22C55E',
+  greenDark: '#15803D',
+  red: '#EF4444',
+  amber: '#F59E0B',
 };
 
 const DeliveryProgress = () => {
@@ -73,16 +80,24 @@ const DeliveryProgress = () => {
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
-  const [arriving, setArriving] = useState(false);
-  const [completing, setCompleting] = useState(false);
-  const [confirmingPayment, setConfirmingPayment] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState('');
-  const [showPaymentPanel, setShowPaymentPanel] = useState(false);
-  const [mpesaInput, setMpesaInput] = useState('');
+
+  const [driverStops, setDriverStops] = useState([]); // this driver's other active stops, for "Next Stops" + position badge
+  const [routeInfo, setRouteInfo] = useState(null);     // { latlngs, distanceKm, durationMin }
+  const [routeError, setRouteError] = useState('');
+
+  // Live position now comes from the single shared tracker (mounted once
+  // at the app root in App.jsx) instead of this screen running its own
+  // watchPosition — previously every driver page had its own GPS watch,
+  // which is what caused this screen to sometimes show a stale/approximate
+  // fix instead of the same live position every other screen had.
+  const { position: driverPos, locationError } = useDriverLocation();
 
   const socket = useSocket({ joinOrder: id });
   const getToken = () => localStorage.getItem('cv-token') || localStorage.getItem('token');
 
+  // ── Order + driver's other active stops ───────────────────────────────
   const fetchOrder = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/orders/${id}`);
@@ -92,7 +107,27 @@ const DeliveryProgress = () => {
     }
   }, [id]);
 
+  const fetchDriverStops = useCallback(async () => {
+    if (!user?._id) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/drivers/${user._id}/orders`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const sorted = [...(Array.isArray(data) ? data : [])].sort((a, b) => {
+        const da = typeof a.routeDistanceKm === 'number' ? a.routeDistanceKm : Number.MAX_SAFE_INTEGER;
+        const db = typeof b.routeDistanceKm === 'number' ? b.routeDistanceKm : Number.MAX_SAFE_INTEGER;
+        return da - db;
+      });
+      setDriverStops(sorted);
+    } catch {
+      // non-critical — "next stops" preview just won't populate
+    }
+  }, [user?._id]);
+
   useEffect(() => { fetchOrder(); }, [fetchOrder]);
+  useEffect(() => { fetchDriverStops(); }, [fetchDriverStops]);
 
   useEffect(() => {
     if (!socket) return;
@@ -105,293 +140,158 @@ const DeliveryProgress = () => {
     };
   }, [socket, fetchOrder]);
 
-  const isCancelled  = order?.status === 'Cancelled';
-  const isDelivered  = order?.status === 'Delivered';
-  const isActive     = order && !isCancelled && !isDelivered;
-  const isArrived    = order?.status === 'Arrived';
-  const isPaid       = order?.paymentStatus === 'Paid';
+  // Falls back to the driver's last known server-side location (populated
+  // on the order via `driver.currentLocation`) until a live GPS fix lands.
+  const effectiveDriverPos = driverPos
+    || (order?.driver?.currentLocation?.lat && order?.driver?.currentLocation?.lng
+      ? { lat: order.driver.currentLocation.lat, lng: order.driver.currentLocation.lng }
+      : null);
 
-  // ── Live position tracking (only while the delivery is actually active) ──
-  const [driverPos, setDriverPos] = useState(null);
-  const [geoError, setGeoError] = useState('');
-  const watchIdRef = useRef(null);
+  const destCoords = order?.coordinates?.lat && order?.coordinates?.lng ? order.coordinates : null;
 
-  useEffect(() => {
-    if (!isActive || typeof navigator === 'undefined' || !navigator.geolocation) return;
-
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setDriverPos(next);
-        setGeoError('');
-
-        // Fire-and-forget — same pattern the dashboard already uses to feed
-        // PATCH /drivers/:driverId/location on every tick.
-        if (user?._id) {
-          fetch(`${API_BASE_URL}/drivers/${user._id}/location`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-            body: JSON.stringify({ lat: next.lat, lng: next.lng }),
-          }).catch(() => {});
-        }
-      },
-      () => setGeoError('Could not read your location. Enable GPS to see live directions.'),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
-    );
-
-    return () => {
-      if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, user?._id]);
-
-  // ── OSRM route line (driver → destination), re-fetched only after
-  // meaningful movement to avoid hammering the public demo server ──────────
-  const [routeCoords, setRouteCoords] = useState(null);   // [[lat,lng], ...]
-  const [routeDistanceKm, setRouteDistanceKm] = useState(null);
-  const [routeDurationMin, setRouteDurationMin] = useState(null);
-  const [routeError, setRouteError] = useState('');
-  const lastRouteFetchPosRef = useRef(null);
-
-  // Some orders don't have order.coordinates saved (e.g. the address was
-  // typed in free-text and never geocoded on creation). Rather than
-  // silently showing a blank map in that case, fall back to geocoding the
-  // address text client-side via Nominatim (OpenStreetMap's free geocoder
-  // — same free-tier spirit as the OSRM routing already in use here).
-  const savedCoords = useMemo(() => {
-    if (!order?.coordinates?.lat || !order?.coordinates?.lng) return null;
-    return { lat: order.coordinates.lat, lng: order.coordinates.lng };
-  }, [order]);
-
-  const [geocodedCoords, setGeocodedCoords] = useState(null);
-  const [geocodeStatus, setGeocodeStatus] = useState('idle'); // idle | loading | done | failed
-  const geocodeAttemptedFor = useRef(null);
+  // ── OSRM route line (public demo server, called directly from the browser) ──
+  const lastFetchRef = useRef({ lat: null, lng: null, at: 0 });
 
   useEffect(() => {
-    if (savedCoords || !order?.location) return;
-    if (geocodeAttemptedFor.current === order.location) return;
-    geocodeAttemptedFor.current = order.location;
+    if (!effectiveDriverPos || !destCoords) return;
 
-    setGeocodeStatus('loading');
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(order.location)}`;
+    const { lat: prevLat, lng: prevLng, at } = lastFetchRef.current;
+    const movedFar = prevLat == null || distanceKm(prevLat, prevLng, effectiveDriverPos.lat, effectiveDriverPos.lng) >= ROUTE_REFETCH_MIN_KM;
+    const timeElapsed = Date.now() - at >= ROUTE_REFETCH_MIN_MS;
+    if (!movedFar && !timeElapsed) return;
+
+    let cancelled = false;
+    lastFetchRef.current = { lat: effectiveDriverPos.lat, lng: effectiveDriverPos.lng, at: Date.now() };
+
+    const url = `https://router.project-osrm.org/route/v1/driving/${effectiveDriverPos.lng},${effectiveDriverPos.lat};${destCoords.lng},${destCoords.lat}?overview=full&geometries=geojson`;
 
     fetch(url)
-      .then((r) => r.json())
-      .then((results) => {
-        const hit = results?.[0];
-        if (!hit) { setGeocodeStatus('failed'); return; }
-        setGeocodedCoords({ lat: parseFloat(hit.lat), lng: parseFloat(hit.lon) });
-        setGeocodeStatus('done');
-      })
-      .catch(() => setGeocodeStatus('failed'));
-  }, [savedCoords, order?.location]);
-
-  const destination = savedCoords || geocodedCoords;
-  const destinationIsApproximate = !savedCoords && !!geocodedCoords;
-  const destinationUnavailable = !savedCoords && geocodeStatus === 'failed';
-
-  useEffect(() => {
-    if (!driverPos || !destination) return;
-
-    const last = lastRouteFetchPosRef.current;
-    const moved = !last || distanceKm(last.lat, last.lng, driverPos.lat, driverPos.lng) >= ROUTE_REFRESH_KM;
-    if (!moved) return;
-
-    lastRouteFetchPosRef.current = driverPos;
-
-    const url = `https://router.project-osrm.org/route/v1/driving/${driverPos.lng},${driverPos.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
-
-    fetch(url)
-      .then((r) => r.json())
+      .then((res) => res.json())
       .then((data) => {
+        if (cancelled) return;
         const route = data?.routes?.[0];
-        if (!route) { setRouteError('No route found.'); return; }
-        setRouteCoords(route.geometry.coordinates.map(([lng, lat]) => [lat, lng]));
-        setRouteDistanceKm(route.distance / 1000);
-        setRouteDurationMin(route.duration / 60);
+        if (!route) { setRouteError('Could not calculate a route.'); return; }
+        const latlngs = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+        setRouteInfo({
+          latlngs,
+          distanceKm: route.distance / 1000,
+          durationMin: route.duration / 60,
+        });
         setRouteError('');
       })
-      .catch(() => setRouteError('Could not fetch directions.'));
-  }, [driverPos, destination]);
-
-  // ── Map ────────────────────────────────────────────────────────────────
-  const mapContainerRef = useRef(null);
-  const mapInstanceRef  = useRef(null);
-  const driverMarkerRef = useRef(null);
-  const destMarkerRef   = useRef(null);
-  const routeLineRef    = useRef(null);
-  const [mapLoadError, setMapLoadError] = useState('');
-  const [hasFitBounds, setHasFitBounds] = useState(false);
-
-  // Lock background scroll while this full-screen map view is mounted, so
-  // the page behind it can't scroll and create the impression of the map
-  // "spilling" past its edges on mobile.
-  useEffect(() => {
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prevOverflow; };
-  }, []);
-
-  useEffect(() => {
-    if (!isActive || !destination) return;
-    let cancelled = false;
-
-    loadLeaflet()
-      .then((L) => {
-        if (cancelled || !L || !mapContainerRef.current) return;
-
-        if (!mapInstanceRef.current) {
-          mapInstanceRef.current = L.map(mapContainerRef.current, { zoomControl: false })
-            .setView([destination.lat, destination.lng], 14);
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors',
-          }).addTo(mapInstanceRef.current);
-          L.control.zoom({ position: 'bottomright' }).addTo(mapInstanceRef.current);
-
-          destMarkerRef.current = L.marker([destination.lat, destination.lng], {
-            icon: L.divIcon({
-              className: '',
-              html: `<div style="background:${GREEN};color:#fff;width:34px;height:34px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.35);border:2px solid #fff;"><span style="transform:rotate(45deg);font-size:15px;">🏪</span></div>`,
-              iconSize: [34, 34],
-              iconAnchor: [17, 34],
-            }),
-          }).addTo(mapInstanceRef.current);
-
-          // Leaflet's classic sizing bug: if the container's real size
-          // wasn't settled at map-creation time, tiles render at the wrong
-          // scale and appear to overflow the box. Forcing a resize check a
-          // beat later — and on every window resize/orientation change —
-          // fixes that reliably.
-          setTimeout(() => mapInstanceRef.current?.invalidateSize(), 150);
-        }
-      })
-      .catch(() => setMapLoadError('Could not load the map. Check your connection and try again.'));
+      .catch(() => { if (!cancelled) setRouteError('Could not reach the routing service.'); });
 
     return () => { cancelled = true; };
-  }, [isActive, destination]);
+  }, [effectiveDriverPos, destCoords]);
+
+  // ── Map rendering ──────────────────────────────────────────────────────
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const driverMarkerRef = useRef(null);
+  const destMarkerRef = useRef(null);
+  const routeLineRef = useRef(null);
+  const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
-    const handleResize = () => mapInstanceRef.current?.invalidateSize();
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
+    let cancelled = false;
+    loadLeaflet().then((L) => {
+      if (cancelled || !L || !mapContainerRef.current || mapRef.current) return;
+      mapRef.current = L.map(mapContainerRef.current, { zoomControl: true }).setView([-1.286389, 36.817223], 13);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap contributors © CARTO',
+        maxZoom: 20,
+      }).addTo(mapRef.current);
+      setMapReady(true);
+    });
     return () => {
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
+      cancelled = true;
+      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
     };
   }, []);
 
-  // Update driver marker + route line as data changes
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !window.L) return;
+  const recenterMap = useCallback(() => {
     const L = window.L;
+    if (!L || !mapRef.current) return;
+    const points = [effectiveDriverPos, destCoords].filter(Boolean).map((p) => [p.lat, p.lng]);
+    if (points.length === 2) mapRef.current.fitBounds(points, { padding: [60, 60] });
+    else if (points.length === 1) mapRef.current.setView(points[0], 15);
+  }, [effectiveDriverPos, destCoords]);
 
-    if (driverPos) {
-      if (!driverMarkerRef.current) {
-        driverMarkerRef.current = L.marker([driverPos.lat, driverPos.lng], {
-          icon: L.divIcon({
-            className: '',
-            html: `<div style="background:#2563eb;color:#fff;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4);">🏍️</div>`,
-            iconSize: [28, 28],
-            iconAnchor: [14, 14],
-          }),
-        }).addTo(map);
-      } else {
-        driverMarkerRef.current.setLatLng([driverPos.lat, driverPos.lng]);
-      }
-    }
-
-    if (routeCoords && routeCoords.length > 1) {
-      if (routeLineRef.current) map.removeLayer(routeLineRef.current);
-      routeLineRef.current = L.polyline(routeCoords, { color: '#2563eb', weight: 5, opacity: 0.85 }).addTo(map);
-    }
-
-    if (!hasFitBounds && driverPos && destination) {
-      map.fitBounds([[driverPos.lat, driverPos.lng], [destination.lat, destination.lng]], { padding: [60, 60] });
-      map.invalidateSize();
-      setHasFitBounds(true);
-    }
-  }, [driverPos, routeCoords, destination, hasFitBounds]);
-
+  // Driver marker
   useEffect(() => {
-    return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-        driverMarkerRef.current = null;
-        destMarkerRef.current = null;
-        routeLineRef.current = null;
-      }
-    };
-  }, []);
+    const L = window.L;
+    if (!L || !mapReady || !mapRef.current || !effectiveDriverPos) return;
+    const icon = L.divIcon({
+      className: '',
+      html: `<div style="width:22px;height:22px;border-radius:50%;background:#3B82F6;border:3px solid #fff;box-shadow:0 0 0 6px rgba(59,130,246,0.25);"></div>`,
+      iconSize: [22, 22],
+      iconAnchor: [11, 11],
+    });
+    if (!driverMarkerRef.current) {
+      driverMarkerRef.current = L.marker([effectiveDriverPos.lat, effectiveDriverPos.lng], { icon }).addTo(mapRef.current);
+    } else {
+      driverMarkerRef.current.setLatLng([effectiveDriverPos.lat, effectiveDriverPos.lng]);
+    }
+  }, [effectiveDriverPos, mapReady]);
 
-  const handleRecenter = () => {
-    const map = mapInstanceRef.current;
-    if (!map || !driverPos || !destination) return;
-    map.invalidateSize();
-    map.fitBounds([[driverPos.lat, driverPos.lng], [destination.lat, destination.lng]], { padding: [60, 60] });
-  };
+  // Destination marker
+  useEffect(() => {
+    const L = window.L;
+    if (!L || !mapReady || !mapRef.current || !destCoords) return;
+    const icon = L.divIcon({
+      className: '',
+      html: `<div style="font-size:26px;line-height:1;transform:translateY(-4px);">📍</div>`,
+      iconSize: [26, 26],
+      iconAnchor: [13, 26],
+    });
+    if (!destMarkerRef.current) {
+      destMarkerRef.current = L.marker([destCoords.lat, destCoords.lng], { icon }).addTo(mapRef.current);
+    } else {
+      destMarkerRef.current.setLatLng([destCoords.lat, destCoords.lng]);
+    }
+  }, [destCoords, mapReady]);
+
+  // Route polyline + initial fit
+  const hasFitOnceRef = useRef(false);
+  useEffect(() => {
+    const L = window.L;
+    if (!L || !mapReady || !mapRef.current) return;
+
+    if (routeLineRef.current) {
+      mapRef.current.removeLayer(routeLineRef.current);
+      routeLineRef.current = null;
+    }
+    if (routeInfo?.latlngs?.length) {
+      routeLineRef.current = L.polyline(routeInfo.latlngs, { color: '#3B82F6', weight: 5, opacity: 0.9 }).addTo(mapRef.current);
+    }
+
+    if (!hasFitOnceRef.current && effectiveDriverPos && destCoords) {
+      recenterMap();
+      hasFitOnceRef.current = true;
+    }
+  }, [routeInfo, mapReady, effectiveDriverPos, destCoords, recenterMap]);
 
   // ── Actions ────────────────────────────────────────────────────────────
-  const handleCall = () => {
-    if (!order?.phone) return;
-    window.location.href = `tel:${order.phone}`;
+  const handleNavigateExternal = () => {
+    if (!destCoords) return;
+    window.open(`https://www.google.com/maps?q=${destCoords.lat},${destCoords.lng}`, '_blank');
   };
 
-  const handleArrived = async () => {
+  const handleMarkArrived = async () => {
+    setActionBusy(true);
     setActionError('');
-    setArriving(true);
     try {
       const res = await fetch(`${API_BASE_URL}/orders/${id}/mark-arrived`, {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       const data = await res.json();
-      if (!res.ok) { setActionError(data.message || 'Could not mark as arrived.'); return; }
+      if (!res.ok) { setActionError(data.message || 'Could not update this delivery.'); return; }
       setOrder(data);
     } catch {
       setActionError('Network error — please try again.');
     } finally {
-      setArriving(false);
-    }
-  };
-
-  const confirmPayment = async (mpesaCode) => {
-    setActionError('');
-    setConfirmingPayment(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/orders/${id}/payment`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-        body: JSON.stringify({ paymentStatus: 'Paid', mpesaCode: mpesaCode || 'CASH' }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setActionError(data.message || 'Could not confirm payment.'); return; }
-      setOrder(data);
-      setShowPaymentPanel(false);
-      setMpesaInput('');
-    } catch {
-      setActionError('Network error — please try again.');
-    } finally {
-      setConfirmingPayment(false);
-    }
-  };
-
-  const handleComplete = async () => {
-    setActionError('');
-    setCompleting(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/orders/${id}/complete-delivery`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      const data = await res.json();
-      if (!res.ok) { setActionError(data.message || 'Could not complete this delivery.'); return; }
-      setOrder(data);
-    } catch {
-      setActionError('Network error — please try again.');
-    } finally {
-      setCompleting(false);
+      setActionBusy(false);
     }
   };
 
@@ -416,273 +316,220 @@ const DeliveryProgress = () => {
 
   if (loading || !order) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT_FAMILY, color: MUTED }}>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT_FAMILY, color: T.muted, background: T.bg }}>
         Loading…
       </div>
     );
   }
 
-  // ── Non-active states (Delivered / Cancelled) — simple summary, no map ──
-  if (!isActive) {
-    const statusIndex = STEP_ORDER.indexOf(order.status);
-    const simpleSteps = [
-      { label: 'Assigned',          completed: statusIndex >= 0 || isDelivered },
-      { label: 'On the Way',        completed: statusIndex >= 1 || isDelivered },
-      { label: 'Arrived',           completed: statusIndex >= 2 || isDelivered },
-      { label: 'Payment Confirmed', completed: isPaid },
-      { label: 'Completed',         completed: isDelivered },
-    ];
+  const readyForPayment = order.status === 'Arrived';
+  const alreadyPaid = order.paymentStatus === 'Paid';
+  const isDelivered = order.status === 'Delivered';
+  const isCancelled = order.status === 'Cancelled';
 
-    return (
-      <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: '#fff', fontFamily: FONT_FAMILY, padding: '20px 20px 40px' }}>
-        <button onClick={() => navigate('/driver-dashboard')} style={{ background: '#f1f5f9', border: 'none', borderRadius: 8, padding: '6px 12px', fontWeight: 700, color: '#334155', cursor: 'pointer', marginBottom: 16 }}>
-          ← Back
-        </button>
-        <h2 style={{ fontSize: 19, fontWeight: 800, marginBottom: 2, color: INK }}>
-          Order #{order.receiptNumber || order._id.slice(-6).toUpperCase()}
-        </h2>
-        <p style={{ fontSize: 13, color: MUTED, marginBottom: 24 }}>{order.customerName} · {order.location}</p>
+  // Distance/ETA: prefer the live OSRM route, fall back to the backend's
+  // last-computed values (from recomputeDriverRoute) while OSRM loads.
+  const liveDistanceKm = routeInfo?.distanceKm ?? order.routeDistanceKm ?? null;
+  const liveDurationMin = routeInfo?.durationMin ?? order.routeDurationMin ?? null;
+  const eta = liveDurationMin != null ? formatClockTime(new Date(Date.now() + liveDurationMin * 60000)) : null;
 
-        {isCancelled && (
-          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', fontSize: 13, fontWeight: 700, padding: '12px 14px', borderRadius: 12, marginBottom: 20, textAlign: 'center' }}>
-            This delivery was cancelled.
-          </div>
-        )}
-        {isDelivered && (
-          <div style={{ background: '#dcfce7', border: '1px solid #bbf7d0', color: GREEN, fontSize: 13, fontWeight: 700, padding: '12px 14px', borderRadius: 12, marginBottom: 20, textAlign: 'center' }}>
-            ✅ Delivered successfully.
-          </div>
-        )}
+  const otherStops = driverStops.filter((s) => s._id !== order._id);
+  const positionIndex = driverStops.findIndex((s) => s._id === order._id);
+  const stopBadge = positionIndex >= 0 ? `${positionIndex + 1} of ${driverStops.length}` : null;
 
-        <div style={{ position: 'relative', paddingLeft: 32 }}>
-          <div style={{ position: 'absolute', left: 11, top: 8, bottom: 8, width: 2, background: '#e2e8f0' }} />
-          {simpleSteps.map((step, index) => (
-            <div key={index} style={{ position: 'relative', marginBottom: 28, display: 'flex', alignItems: 'flex-start' }}>
-              <div style={{
-                position: 'absolute', left: -32, width: 24, height: 24, borderRadius: '50%',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                border: `2px solid ${step.completed ? GREEN : '#cbd5e1'}`,
-                background: step.completed ? GREEN : '#fff',
-              }}>
-                {step.completed && <span style={{ color: '#fff', fontSize: 11, fontWeight: 800 }}>✓</span>}
-              </div>
-              <div>
-                <p style={{ fontWeight: 800, color: step.completed ? GREEN : '#94a3b8', margin: 0 }}>{step.label}</p>
-                <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '2px 0 0' }}>{step.completed ? 'Done' : 'Pending'}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <button
-          onClick={() => navigate(`/delivery-details/${id}`)}
-          style={{ width: '100%', background: GREEN, color: '#fff', padding: '15px', borderRadius: 12, fontWeight: 800, fontSize: 14.5, border: 'none', cursor: 'pointer' }}
-        >
-          View Delivery Details
-        </button>
-      </div>
-    );
-  }
-
-  // ── Active state — full-screen map centerpiece ──────────────────────────
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#0f172a', fontFamily: FONT_FAMILY, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <style>{`
-        * { box-sizing: border-box; }
-        .leaflet-container {
-          width: 100% !important;
-          height: 100% !important;
-          font-family: ${FONT_FAMILY};
-        }
-        .leaflet-pane, .leaflet-tile-pane, .leaflet-map-pane {
-          overflow: hidden;
-        }
-      `}</style>
+    <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: T.bg, fontFamily: FONT_FAMILY, color: T.ink, display: 'flex', flexDirection: 'column' }}>
 
-      {/* ── Map fills the screen ── */}
-      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
-        <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+      {/* ── Header ── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px 10px' }}>
+        <button onClick={() => navigate('/driver-dashboard')} style={{ background: 'none', border: 'none', color: T.ink, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 14, padding: 0 }}>
+          ← <span>Delivery in Progress</span>
+        </button>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: T.green }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: T.green }} /> Live
+        </span>
       </div>
 
-      {/* ── Top overlay: back + order info + distance/ETA banner ── */}
-      <div style={{ position: 'relative', zIndex: 10, padding: '14px 14px 0' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <button
-            onClick={() => navigate('/driver-dashboard')}
-            style={{ background: '#fff', border: 'none', borderRadius: 10, width: 38, height: 38, fontSize: 16, fontWeight: 700, color: INK, cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,.25)' }}
-          >
-            ←
-          </button>
-          <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: '8px 14px', boxShadow: '0 2px 8px rgba(0,0,0,.25)', minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 800, color: INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              🏪 {order.shopName || order.businessName || order.location}
-            </div>
-            <div style={{ fontSize: 11, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>👤 {order.customerName}</div>
-          </div>
-          <button
-            onClick={handleRecenter}
-            title="Recenter"
-            style={{ background: '#fff', border: 'none', borderRadius: 10, width: 38, height: 38, fontSize: 16, cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,.25)', flexShrink: 0 }}
-          >
-            🎯
-          </button>
-        </div>
-
-        <div style={{ background: '#fff', borderRadius: 12, padding: '10px 14px', boxShadow: '0 2px 8px rgba(0,0,0,.25)', marginBottom: 10 }}>
-          {destinationUnavailable ? (
-            <div>
-              <div style={{ fontSize: 12.5, color: '#dc2626', fontWeight: 700, marginBottom: 6 }}>
-                ⚠️ Couldn't find this location on the map automatically.
-              </div>
-              <a
-                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.location)}`}
-                target="_blank" rel="noreferrer"
-                style={{ fontSize: 12.5, color: GREEN, fontWeight: 700, textDecoration: 'none' }}
-              >
-                🗺️ Search "{order.location}" in Google Maps →
-              </a>
-            </div>
-          ) : !destination ? (
-            <div style={{ fontSize: 12.5, color: MUTED }}>
-              📍 Locating delivery address…
-            </div>
-          ) : routeDistanceKm != null ? (
-            <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13.5, fontWeight: 800, color: INK }}>📏 {routeDistanceKm.toFixed(1)} km</span>
-              <span style={{ fontSize: 13.5, fontWeight: 800, color: GREEN }}>🕒 ETA {formatDuration(routeDurationMin)}</span>
-              {destinationIsApproximate && (
-                <span style={{ fontSize: 10.5, color: MUTED, fontWeight: 600 }}>· approximate location</span>
-              )}
-            </div>
-          ) : (
-            <div style={{ fontSize: 12.5, color: MUTED }}>
-              {mapLoadError || geoError || routeError || 'Getting your live location…'}
-            </div>
-          )}
-        </div>
-
+      <div style={{ padding: '0 16px' }}>
         {actionError && (
-          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', fontSize: 12.5, padding: '10px 12px', borderRadius: 12, marginBottom: 10 }}>
+          <div style={{ background: '#3B1414', border: `1px solid ${T.red}55`, color: '#FCA5A5', fontSize: 12.5, padding: '10px 12px', borderRadius: 10, marginBottom: 10 }}>
             {actionError}
           </div>
         )}
-      </div>
-
-      <div style={{ flex: 1 }} />
-
-      {/* ── Bottom sheet: status + payment + actions ── */}
-      <div style={{ position: 'relative', zIndex: 10, background: '#fff', borderRadius: '20px 20px 0 0', padding: '16px 16px 20px', boxShadow: '0 -4px 20px rgba(0,0,0,.25)', maxHeight: '55vh', overflowY: 'auto' }}>
-        <div style={{ width: 40, height: 4, background: '#e2e8f0', borderRadius: 999, margin: '0 auto 14px' }} />
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-          <span style={{
-            fontSize: 12, fontWeight: 800, padding: '5px 12px', borderRadius: 999,
-            background: isArrived ? '#ede9fe' : '#dbeafe',
-            color: isArrived ? '#6d28d9' : '#1d4ed8',
-          }}>
-            {isArrived ? '📍 Arrived' : '🚚 On the Way'}
-          </span>
-          <span style={{
-            fontSize: 12, fontWeight: 800, padding: '5px 12px', borderRadius: 999,
-            background: isPaid ? '#dcfce7' : '#fef3c7',
-            color: isPaid ? GREEN : '#92400e',
-          }}>
-            {isPaid ? '✅ Paid' : '💰 Payment Pending'}
-          </span>
-        </div>
-
-        <div style={{ fontSize: 12, color: MUTED, marginBottom: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          📍 {order.location}
-        </div>
-
-        {/* Payment collection panel */}
-        {isArrived && !isPaid && showPaymentPanel && (
-          <div style={{ background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
-            {order.paymentMethod === 'M-Pesa' ? (
-              <>
-                <div style={{ fontSize: 12, fontWeight: 700, color: INK, marginBottom: 6 }}>Enter M-Pesa confirmation code</div>
-                <input
-                  type="text"
-                  value={mpesaInput}
-                  onChange={(e) => setMpesaInput(e.target.value.toUpperCase())}
-                  placeholder="e.g. QAB1CD2EFG"
-                  style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: `1px solid ${BORDER}`, fontSize: 13, marginBottom: 10, fontFamily: 'inherit', boxSizing: 'border-box' }}
-                />
-                <button
-                  onClick={() => confirmPayment(mpesaInput)}
-                  disabled={!mpesaInput.trim() || confirmingPayment}
-                  style={{ width: '100%', background: GREEN, color: '#fff', border: 'none', borderRadius: 10, padding: '11px', fontWeight: 800, fontSize: 13, cursor: !mpesaInput.trim() ? 'not-allowed' : 'pointer', opacity: !mpesaInput.trim() ? 0.6 : 1 }}
-                >
-                  {confirmingPayment ? 'Confirming…' : 'Confirm Payment'}
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => confirmPayment('CASH')}
-                disabled={confirmingPayment}
-                style={{ width: '100%', background: GREEN, color: '#fff', border: 'none', borderRadius: 10, padding: '11px', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}
-              >
-                {confirmingPayment ? 'Confirming…' : '💵 Confirm Cash Received'}
-              </button>
-            )}
+        {locationError && (
+          <div style={{ background: '#3B2E10', border: `1px solid ${T.amber}55`, color: '#FCD34D', fontSize: 12, padding: '9px 12px', borderRadius: 10, marginBottom: 10 }}>
+            {locationError}
+          </div>
+        )}
+        {isCancelled && (
+          <div style={{ background: '#3B1414', border: `1px solid ${T.red}55`, color: '#FCA5A5', fontSize: 13, fontWeight: 700, padding: '10px 12px', borderRadius: 10, marginBottom: 10, textAlign: 'center' }}>
+            This delivery was cancelled.
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: order.phone ? '1fr 2fr' : '1fr', gap: 8, marginBottom: 8 }}>
-          {order.phone && (
-            <button
-              onClick={handleCall}
-              style={{ padding: '13px 0', borderRadius: 12, fontWeight: 700, fontSize: 13, background: '#fff', color: INK, border: `1.5px solid ${BORDER}`, cursor: 'pointer' }}
-            >
-              📞 Call
-            </button>
-          )}
+        {/* ── Current stop card ── */}
+        <div style={{ background: T.panel, border: `1px solid ${T.panelBorder}`, borderRadius: 16, padding: 16, marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: T.green, letterSpacing: 0.4, textTransform: 'uppercase' }}>Current Stop</span>
+            {stopBadge && (
+              <span style={{ background: '#1A2530', color: T.muted, fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999 }}>{stopBadge}</span>
+            )}
+          </div>
 
-          {!isArrived && (
-            <button
-              onClick={handleArrived}
-              disabled={arriving}
-              style={{ padding: '13px 0', borderRadius: 12, fontWeight: 800, fontSize: 13.5, background: GREEN, color: '#fff', border: 'none', cursor: arriving ? 'not-allowed' : 'pointer' }}
-            >
-              {arriving ? 'Marking…' : '📍 I\'ve Arrived'}
-            </button>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <div style={{ width: 34, height: 34, borderRadius: '50%', background: T.greenDark, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>🏪</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 15.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{order.customerName}</div>
+              {order.phone && <div style={{ fontSize: 12, color: T.muted }}>{order.phone}</div>}
+            </div>
+            {order.phone && (
+              <a href={`tel:${order.phone}`} style={{ marginLeft: 'auto', width: 34, height: 34, borderRadius: '50%', background: T.green, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none', fontSize: 15, flexShrink: 0 }}>
+                📞
+              </a>
+            )}
+          </div>
 
-          {isArrived && !isPaid && !showPaymentPanel && (
-            <button
-              onClick={() => setShowPaymentPanel(true)}
-              style={{ padding: '13px 0', borderRadius: 12, fontWeight: 800, fontSize: 13.5, background: '#f59e0b', color: '#fff', border: 'none', cursor: 'pointer' }}
-            >
-              💰 Collect Payment
-            </button>
-          )}
+          <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 12, display: 'flex', gap: 6 }}>
+            <span>📍</span><span>{order.location}</span>
+          </div>
 
-          {isArrived && isPaid && (
-            <button
-              onClick={handleComplete}
-              disabled={completing}
-              style={{ padding: '13px 0', borderRadius: 12, fontWeight: 800, fontSize: 13.5, background: GREEN, color: '#fff', border: 'none', cursor: completing ? 'not-allowed' : 'pointer' }}
-            >
-              {completing ? 'Completing…' : '✅ Complete Delivery'}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+            <div style={{ background: '#1A2530', borderRadius: 10, padding: '10px 0', textAlign: 'center' }}>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>{liveDistanceKm != null ? `${liveDistanceKm.toFixed(1)} km` : '—'}</div>
+              <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>Distance</div>
+            </div>
+            <div style={{ background: '#1A2530', borderRadius: 10, padding: '10px 0', textAlign: 'center' }}>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>{formatDuration(liveDurationMin)}</div>
+              <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>ETA</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: T.muted }}>
+            <span style={{ width: 26, height: 26, borderRadius: '50%', background: '#1E3A8A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>🧭</span>
+            Proceed to the shop — follow the route below.
+          </div>
+        </div>
+
+        {/* ── Next stops preview ── */}
+        {otherStops.length > 0 && (
+          <div style={{ background: T.panel, border: `1px solid ${T.panelBorder}`, borderRadius: 16, padding: '12px 16px', marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: T.muted, letterSpacing: 0.4, textTransform: 'uppercase' }}>Next Stops</span>
+              <button onClick={() => navigate('/my-deliveries')} style={{ background: 'none', border: 'none', color: T.green, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', padding: 0 }}>View all</button>
+            </div>
+            {otherStops.slice(0, 3).map((stop, i) => (
+              <div
+                key={stop._id}
+                onClick={() => navigate(`/delivery-details/${stop._id}`)}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 0', cursor: 'pointer' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <span style={{ width: 22, height: 22, borderRadius: '50%', background: '#1A2530', color: T.muted, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {i + 2}
+                  </span>
+                  <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{stop.customerName}</span>
+                </div>
+                <span style={{ fontSize: 12, color: T.muted, flexShrink: 0 }}>
+                  {typeof stop.routeDistanceKm === 'number' ? `${stop.routeDistanceKm.toFixed(1)} km` : '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Map ── */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 380, margin: '0 16px 16px', borderRadius: 16, overflow: 'hidden', border: `1px solid ${T.panelBorder}` }}>
+        {!destCoords && (
+          <div style={{ position: 'absolute', inset: 0, background: T.panel, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.muted, fontSize: 13, textAlign: 'center', padding: 20, zIndex: 5 }}>
+            No location on file for this shop — use the customer's phone number above to confirm directions.
+          </div>
+        )}
+        {routeError && destCoords && (
+          <div style={{ position: 'absolute', top: 10, left: 10, right: 10, background: '#3B1414', border: `1px solid ${T.red}55`, color: '#FCA5A5', fontSize: 11.5, padding: '8px 10px', borderRadius: 8, zIndex: 10 }}>
+            {routeError}
+          </div>
+        )}
+        <div ref={mapContainerRef} style={{ width: '100%', height: '100%', minHeight: 380 }} />
+
+        <button
+          onClick={recenterMap}
+          style={{ position: 'absolute', bottom: 12, left: 12, background: 'rgba(18,24,31,0.9)', color: T.ink, border: `1px solid ${T.panelBorder}`, borderRadius: 10, padding: '8px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, zIndex: 10 }}
+        >
+          🎯 Re-center
+        </button>
+
+        {liveDistanceKm != null && (
+          <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(18,24,31,0.9)', border: `1px solid ${T.panelBorder}`, borderRadius: 10, padding: '8px 12px', zIndex: 10 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink }}>
+              {liveDistanceKm.toFixed(1)} km · {formatDuration(liveDurationMin)}
+            </div>
+            {eta && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 1 }}>Estimated arrival {eta}</div>}
+          </div>
+        )}
+      </div>
+
+      {/* ── Bottom action bar ── */}
+      <div style={{ background: T.panel, borderTop: `1px solid ${T.panelBorder}`, padding: '12px 16px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          onClick={handleNavigateExternal}
+          disabled={!destCoords}
+          style={{ flex: '1 1 120px', background: '#fff', color: '#0B0F14', border: 'none', borderRadius: 12, padding: '13px 0', fontWeight: 800, fontSize: 13.5, cursor: destCoords ? 'pointer' : 'not-allowed', opacity: destCoords ? 1 : 0.5 }}
+        >
+          🧭 Navigate
+        </button>
+
+        {!isDelivered && !isCancelled && order.status === 'Driver On The Way' && (
+          <button
+            onClick={handleMarkArrived}
+            disabled={actionBusy}
+            style={{ flex: '1 1 120px', background: '#1A2530', color: T.ink, border: `1px solid ${T.panelBorder}`, borderRadius: 12, padding: '13px 0', fontWeight: 800, fontSize: 13.5, cursor: actionBusy ? 'not-allowed' : 'pointer' }}
+          >
+            {actionBusy ? 'Updating…' : "✓ I've Arrived"}
+          </button>
+        )}
+
+        {readyForPayment && !alreadyPaid && (
+          <button
+            onClick={() => navigate(`/delivery-payment/${order._id}`)}
+            style={{ flex: '1 1 120px', background: '#1A2530', color: T.ink, border: `1px solid ${T.panelBorder}`, borderRadius: 12, padding: '13px 0', fontWeight: 800, fontSize: 13.5, cursor: 'pointer' }}
+          >
+            💳 Collect Payment
+          </button>
+        )}
+
+        {readyForPayment && alreadyPaid && !isDelivered && (
+          <button
+            onClick={() => navigate(`/delivery-payment/${order._id}`)}
+            style={{ flex: '1 1 120px', background: T.green, color: '#06210F', border: 'none', borderRadius: 12, padding: '13px 0', fontWeight: 800, fontSize: 13.5, cursor: 'pointer' }}
+          >
+            ✅ Complete Delivery
+          </button>
+        )}
+
+        {isDelivered && (
+          <button
+            onClick={() => navigate('/driver-dashboard')}
+            style={{ flex: '1 1 220px', background: T.green, color: '#06210F', border: 'none', borderRadius: 12, padding: '13px 0', fontWeight: 800, fontSize: 13.5, cursor: 'pointer' }}
+          >
+            ✅ Delivered — Back to Dashboard
+          </button>
+        )}
+      </div>
+
+      {/* ── Secondary links ── */}
+      {!isDelivered && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 16px 20px' }}>
+          <button onClick={() => navigate(`/delivery-details/${id}`)} style={{ background: 'none', border: 'none', color: T.muted, fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+            View full details
+          </button>
+          {!isCancelled && (
+            <button onClick={handleCancel} disabled={cancelling} style={{ background: 'none', border: 'none', color: T.red, fontSize: 12, fontWeight: 600, cursor: cancelling ? 'not-allowed' : 'pointer', padding: 0 }}>
+              {cancelling ? 'Cancelling…' : 'Cancel delivery'}
             </button>
           )}
         </div>
-
-        <button
-          onClick={() => navigate(`/delivery-details/${id}`)}
-          style={{ width: '100%', background: 'none', border: 'none', color: MUTED, fontWeight: 700, fontSize: 12.5, padding: '8px 0', cursor: 'pointer' }}
-        >
-          View Delivery Details
-        </button>
-
-        <button
-          onClick={handleCancel}
-          disabled={cancelling}
-          style={{ width: '100%', border: '1.5px solid #fecaca', color: '#dc2626', background: '#fff', padding: '11px', borderRadius: 12, fontWeight: 700, fontSize: 12.5, cursor: cancelling ? 'not-allowed' : 'pointer' }}
-        >
-          {cancelling ? 'Cancelling…' : 'Cancel Delivery'}
-        </button>
-      </div>
+      )}
     </div>
   );
 };

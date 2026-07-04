@@ -31,6 +31,7 @@ import MapView from "./pages/MapView";
 
 // Providers & Components
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { DriverLocationProvider } from "./context/DriverLocationContext";
 import { CartProvider } from "./context/CartContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import { NotificationProvider } from "./context/NotificationContext";
@@ -126,13 +127,21 @@ function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <NotificationProvider>
-          <CartProvider>
-            <BrowserRouter>
-              <AppRoutes />
-            </BrowserRouter>
-          </CartProvider>
-        </NotificationProvider>
+        {/* Mounted once, here — NOT inside any <Route> — so GPS tracking
+            survives navigation across every driver screen (Dashboard,
+            My Deliveries, Route Map, Delivery Progress, Profile) instead
+            of restarting/stopping whenever a page unmounts. It reads
+            `user` from AuthProvider above it and is a no-op for anyone
+            who isn't logged in as a driver. */}
+        <DriverLocationProvider>
+          <NotificationProvider>
+            <CartProvider>
+              <BrowserRouter>
+                <AppRoutes />
+              </BrowserRouter>
+            </CartProvider>
+          </NotificationProvider>
+        </DriverLocationProvider>
       </AuthProvider>
     </ThemeProvider>
   );
