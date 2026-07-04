@@ -139,13 +139,75 @@ const LoginPage = () => {
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: "'Segoe UI', Roboto, sans-serif", background: '#fff' }}>
-      <div className="login-wrapper" style={{ display: 'flex', flex: 1, minHeight: '100vh' }}>
+
+      {/* Responsive rules — only place a real media query is possible since the
+          rest of this component uses inline styles. Stacks the two panels on
+          screens narrower than 768px so the login form is no longer pushed
+          off-screen, and trims padding/sizes so nothing gets clipped. */}
+      <style>{`
+        .login-wrapper {
+          display: flex;
+          flex: 1;
+          min-height: 100vh;
+        }
+        .login-left, .login-right {
+          flex: 1;
+        }
+
+        @media (max-width: 768px) {
+          .login-wrapper {
+            flex-direction: column;
+            min-height: auto;
+          }
+          .login-left {
+            padding: 32px 20px !important;
+            width: 100%;
+            box-sizing: border-box;
+          }
+          .login-right {
+            padding: 32px 24px !important;
+            width: 100%;
+            box-sizing: border-box;
+            box-shadow: none !important;
+          }
+          .login-left h1 {
+            font-size: 26px !important;
+          }
+          .login-badges {
+            gap: 16px !important;
+            flex-wrap: wrap;
+            justify-content: center;
+          }
+          .login-badges > div {
+            width: 80px !important;
+          }
+          .login-cart-icon {
+            width: 110px !important;
+            height: 110px !important;
+            font-size: 46px !important;
+            margin-bottom: 28px !important;
+          }
+        }
+
+        @media (max-width: 400px) {
+          .login-left h1 {
+            font-size: 22px !important;
+          }
+          .login-badges > div {
+            width: 72px !important;
+          }
+          .login-badges {
+            gap: 10px !important;
+          }
+        }
+      `}</style>
+
+      <div className="login-wrapper">
 
         {/* ── Left branding panel ─────────────────────────────────────── */}
         <div
           className="login-left"
           style={{
-            flex: 1,
             display: 'flex',
             background: 'linear-gradient(160deg, #f0fdf4 0%, #dcfce7 60%, #bbf7d0 100%)',
             flexDirection: 'column',
@@ -175,7 +237,7 @@ const LoginPage = () => {
             Kenya's trusted wholesale &amp; retail grocery supplier
           </p>
 
-          <div style={{
+          <div className="login-cart-icon" style={{
             width: 150, height: 150, borderRadius: 28,
             background: 'linear-gradient(160deg, #4ade80 0%, #16a34a 100%)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -185,7 +247,7 @@ const LoginPage = () => {
             🛒
           </div>
 
-          <div style={{ display: 'flex', gap: 32 }}>
+          <div className="login-badges" style={{ display: 'flex', gap: 32 }}>
             {BADGES.map(b => (
               <div key={b.title} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 90 }}>
                 <div style={{ fontSize: 22, marginBottom: 6 }}>{b.icon}</div>
@@ -200,7 +262,6 @@ const LoginPage = () => {
         <div
           className="login-right"
           style={{
-            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',

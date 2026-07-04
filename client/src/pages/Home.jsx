@@ -20,7 +20,7 @@ const CATEGORIES = [
 ];
 
 const SLIDES = [
-  { bg: 'linear-gradient(135deg,#15803d,#4ade80)', title: 'Fresh Groceries 🛒', sub: 'Wholesale & Retail — delivery before 6PM!' },
+  { bg: 'linear-gradient(135deg,#15803d,#4ade80)', title: 'Cerestrial Ventures 🛒', sub: 'Wholesale & Retail — delivery before 6PM!' },
   { bg: 'linear-gradient(135deg,#b45309,#fbbf24)', title: 'Daily Offers 🔥',    sub: 'Mumias Sugar 2kg — KSh 199 today only!' },
   { bg: 'linear-gradient(135deg,#1d4ed8,#60a5fa)', title: 'Bulk Savings 💰',    sub: 'Buy more, save more on every order.' },
 ];

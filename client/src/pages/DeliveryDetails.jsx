@@ -41,6 +41,7 @@ const DeliveryDetails = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [markingPaid, setMarkingPaid] = useState(false);
 
   const fetchOrder = useCallback(async () => {
     try {
@@ -87,6 +88,29 @@ const DeliveryDetails = () => {
       setError('Network error — please try again.');
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handleMarkAsPaid = async () => {
+    if (!window.confirm('Confirm you have collected cash payment for this order?')) return;
+    setMarkingPaid(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/orders/${id}/mark-paid`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.message || 'Could not update payment status.');
+        return;
+      }
+      // Reflect the change immediately rather than waiting on a refetch/socket event
+      setOrder((prev) => (prev ? { ...prev, paymentStatus: 'Paid' } : prev));
+    } catch {
+      setError('Network error — please try again.');
+    } finally {
+      setMarkingPaid(false);
     }
   };
 
@@ -232,7 +256,7 @@ const DeliveryDetails = () => {
               KSh {((order.totalAmount || 0) + (order.deliveryFee || 0) - (order.discount || 0)).toLocaleString()}
             </span>
           </div>
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{
               display: 'inline-block', fontFamily: F_MONO, fontSize: 10.5, fontWeight: 500, letterSpacing: 0.6,
               textTransform: 'uppercase', padding: '4px 9px', borderRadius: 4,
@@ -243,6 +267,20 @@ const DeliveryDetails = () => {
             }}>
               {alreadyPaid ? '✓ Payment received' : 'Payment pending'}
             </span>
+
+            {!alreadyPaid && (
+              <button
+                onClick={handleMarkAsPaid}
+                disabled={markingPaid}
+                style={{
+                  background: markingPaid ? `${T.green}55` : T.green, color: '#fff', border: 'none',
+                  borderRadius: 6, padding: '6px 12px', fontWeight: 600, fontSize: 11.5,
+                  fontFamily: F_BODY, cursor: markingPaid ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {markingPaid ? 'Updating…' : '💵 Mark as Paid'}
+              </button>
+            )}
           </div>
         </div>
 

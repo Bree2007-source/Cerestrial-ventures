@@ -223,6 +223,15 @@ const DeliveryProgress = () => {
   const [mapLoadError, setMapLoadError] = useState('');
   const [hasFitBounds, setHasFitBounds] = useState(false);
 
+  // Lock background scroll while this full-screen map view is mounted, so
+  // the page behind it can't scroll and create the impression of the map
+  // "spilling" past its edges on mobile.
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prevOverflow; };
+  }, []);
+
   useEffect(() => {
     if (!isActive || !destination) return;
     let cancelled = false;
@@ -247,12 +256,29 @@ const DeliveryProgress = () => {
               iconAnchor: [17, 34],
             }),
           }).addTo(mapInstanceRef.current);
+
+          // Leaflet's classic sizing bug: if the container's real size
+          // wasn't settled at map-creation time, tiles render at the wrong
+          // scale and appear to overflow the box. Forcing a resize check a
+          // beat later — and on every window resize/orientation change —
+          // fixes that reliably.
+          setTimeout(() => mapInstanceRef.current?.invalidateSize(), 150);
         }
       })
       .catch(() => setMapLoadError('Could not load the map. Check your connection and try again.'));
 
     return () => { cancelled = true; };
   }, [isActive, destination]);
+
+  useEffect(() => {
+    const handleResize = () => mapInstanceRef.current?.invalidateSize();
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, []);
 
   // Update driver marker + route line as data changes
   useEffect(() => {
@@ -282,6 +308,7 @@ const DeliveryProgress = () => {
 
     if (!hasFitBounds && driverPos && destination) {
       map.fitBounds([[driverPos.lat, driverPos.lng], [destination.lat, destination.lng]], { padding: [60, 60] });
+      map.invalidateSize();
       setHasFitBounds(true);
     }
   }, [driverPos, routeCoords, destination, hasFitBounds]);
@@ -301,6 +328,7 @@ const DeliveryProgress = () => {
   const handleRecenter = () => {
     const map = mapInstanceRef.current;
     if (!map || !driverPos || !destination) return;
+    map.invalidateSize();
     map.fitBounds([[driverPos.lat, driverPos.lng], [destination.lat, destination.lng]], { padding: [60, 60] });
   };
 
@@ -458,11 +486,21 @@ const DeliveryProgress = () => {
 
   // ── Active state — full-screen map centerpiece ──────────────────────────
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#0f172a', fontFamily: FONT_FAMILY, display: 'flex', flexDirection: 'column' }}>
-      <style>{`* { box-sizing: border-box; }`}</style>
+    <div style={{ position: 'fixed', inset: 0, background: '#0f172a', fontFamily: FONT_FAMILY, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <style>{`
+        * { box-sizing: border-box; }
+        .leaflet-container {
+          width: 100% !important;
+          height: 100% !important;
+          font-family: ${FONT_FAMILY};
+        }
+        .leaflet-pane, .leaflet-tile-pane, .leaflet-map-pane {
+          overflow: hidden;
+        }
+      `}</style>
 
       {/* ── Map fills the screen ── */}
-      <div style={{ position: 'absolute', inset: 0 }}>
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
         <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
       </div>
 
@@ -475,16 +513,16 @@ const DeliveryProgress = () => {
           >
             ←
           </button>
-          <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: '8px 14px', boxShadow: '0 2px 8px rgba(0,0,0,.25)' }}>
+          <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: '8px 14px', boxShadow: '0 2px 8px rgba(0,0,0,.25)', minWidth: 0 }}>
             <div style={{ fontSize: 13.5, fontWeight: 800, color: INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               🏪 {order.shopName || order.businessName || order.location}
             </div>
-            <div style={{ fontSize: 11, color: MUTED }}>👤 {order.customerName}</div>
+            <div style={{ fontSize: 11, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>👤 {order.customerName}</div>
           </div>
           <button
             onClick={handleRecenter}
             title="Recenter"
-            style={{ background: '#fff', border: 'none', borderRadius: 10, width: 38, height: 38, fontSize: 16, cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,.25)' }}
+            style={{ background: '#fff', border: 'none', borderRadius: 10, width: 38, height: 38, fontSize: 16, cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,.25)', flexShrink: 0 }}
           >
             🎯
           </button>
@@ -533,10 +571,10 @@ const DeliveryProgress = () => {
       <div style={{ flex: 1 }} />
 
       {/* ── Bottom sheet: status + payment + actions ── */}
-      <div style={{ position: 'relative', zIndex: 10, background: '#fff', borderRadius: '20px 20px 0 0', padding: '16px 16px 20px', boxShadow: '0 -4px 20px rgba(0,0,0,.25)' }}>
+      <div style={{ position: 'relative', zIndex: 10, background: '#fff', borderRadius: '20px 20px 0 0', padding: '16px 16px 20px', boxShadow: '0 -4px 20px rgba(0,0,0,.25)', maxHeight: '55vh', overflowY: 'auto' }}>
         <div style={{ width: 40, height: 4, background: '#e2e8f0', borderRadius: 999, margin: '0 auto 14px' }} />
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
           <span style={{
             fontSize: 12, fontWeight: 800, padding: '5px 12px', borderRadius: 999,
             background: isArrived ? '#ede9fe' : '#dbeafe',
@@ -553,7 +591,7 @@ const DeliveryProgress = () => {
           </span>
         </div>
 
-        <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           📍 {order.location}
         </div>
 
@@ -568,7 +606,7 @@ const DeliveryProgress = () => {
                   value={mpesaInput}
                   onChange={(e) => setMpesaInput(e.target.value.toUpperCase())}
                   placeholder="e.g. QAB1CD2EFG"
-                  style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: `1px solid ${BORDER}`, fontSize: 13, marginBottom: 10, fontFamily: 'inherit' }}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: `1px solid ${BORDER}`, fontSize: 13, marginBottom: 10, fontFamily: 'inherit', boxSizing: 'border-box' }}
                 />
                 <button
                   onClick={() => confirmPayment(mpesaInput)}
