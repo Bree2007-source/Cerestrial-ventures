@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useDriverLocation } from '../context/DriverLocationContext';
 import API_BASE_URL from '../config';
 import useSocket from '../hooks/useSocket';
 import DriverBottomNav from '../components/DriverBottomNav';
@@ -21,18 +22,21 @@ const DriverDashboard = () => {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
 
+  // GPS tracking itself lives entirely in DriverLocationProvider (mounted
+  // once at the app root in App.jsx) — this page just reads the current
+  // fix / error state to display, same as every other driver screen does.
+  const { locationError } = useDriverLocation();
+
   const driverId = user?._id;
 
   const [stats, setStats] = useState({ total: 0, completed: 0, remaining: 0, earnings: 0 });
   const [activeOrders, setActiveOrders] = useState([]);
   const [dataLoading, setDataLoading] = useState(true);
-  const [locationError, setLocationError] = useState('');
   const [startingId, setStartingId] = useState(null);
   const [actionError, setActionError] = useState('');
   const [unreadCount, setUnreadCount] = useState(0);
 
   const socket = useSocket({ joinDriver: driverId });
-  const watchIdRef = useRef(null);
 
   const getToken = () => localStorage.getItem('cv-token') || localStorage.getItem('token');
 
@@ -124,42 +128,12 @@ const DriverDashboard = () => {
   const totalRouteDistanceKm = activeOrders.reduce((sum, order) => sum + (order.routeDistanceKm || 0), 0);
   const estimatedTimeMin = activeOrders.reduce((sum, order) => sum + (order.routeDurationMin || 0), 0);
 
-  useEffect(() => {
-    if (!driverId || !navigator.geolocation) return;
-
-    if (!hasActiveDeliveries) {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-      return;
-    }
-
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords;
-        setLocationError('');
-
-        fetch(`${API_BASE_URL}/drivers/${driverId}/location`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${getToken()}`,
-          },
-          body: JSON.stringify({ lat: latitude, lng: longitude, address: '' }),
-        }).catch(() => { /* next watchPosition tick will retry */ });
-      },
-      () => setLocationError('Location access is off — turn it on so customers and admin can see where you are.'),
-      { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 }
-    );
-
-    return () => {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-    };
-  }, [driverId, hasActiveDeliveries]);
+  // NOTE: GPS watchPosition + the PATCH /drivers/:driverId/location call
+  // used to live here, gated by `hasActiveDeliveries`. That's been removed
+  // entirely — tracking is now handled once, app-wide, by
+  // DriverLocationProvider regardless of which page is open or whether
+  // the driver currently has active deliveries (the admin live map wants
+  // to see the driver whether or not they're mid-delivery).
 
   const handleStartDelivery = async (order) => {
     setActionError('');
@@ -352,27 +326,27 @@ const DriverDashboard = () => {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: nextStop ? 0 : 12 }}>
-            <button
-              onClick={() => nextStop && handleStartDelivery(nextStop)}
-              disabled={!nextStop}
-              style={{
-                flex: 1, minWidth: 150, background: GREEN, color: '#fff', border: 'none', borderRadius: 14,
-                padding: '15px 0', fontWeight: 800, fontSize: 15, cursor: nextStop ? 'pointer' : 'not-allowed',
-                boxShadow: nextStop ? '0 12px 24px rgba(18, 99, 63, 0.18)' : 'none',
-              }}
-            >
-              Start Delivery
-            </button>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: nextStop ? 0 : 12 }}>
             <button
               onClick={() => nextStop && window.open(`https://www.google.com/maps?q=${nextStop.coordinates?.lat},${nextStop.coordinates?.lng}`, '_blank')}
               disabled={!nextStop}
               style={{
-                flex: 1, minWidth: 120, background: '#fff', color: INK, border: `1px solid ${BORDER}`, borderRadius: 14,
-                padding: '15px 0', fontWeight: 700, fontSize: 15, cursor: nextStop ? 'pointer' : 'not-allowed',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                background: '#fff', color: INK, border: `1px solid ${BORDER}`, borderRadius: 12,
+                padding: '13px 0', fontWeight: 700, fontSize: 13.5, cursor: nextStop ? 'pointer' : 'not-allowed',
               }}
             >
-              Navigate
+              <IconNav color={INK} size={15} /> Navigate
+            </button>
+            <button
+              onClick={() => nextStop && handleStartDelivery(nextStop)}
+              disabled={!nextStop}
+              style={{
+                background: GREEN, color: '#fff', border: 'none', borderRadius: 12,
+                padding: '13px 0', fontWeight: 700, fontSize: 13.5, cursor: nextStop ? 'pointer' : 'not-allowed',
+              }}
+            >
+              Start Delivery
             </button>
           </div>
 
@@ -498,13 +472,6 @@ const IconChevron = ({ color = '#1c1f1e', size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="m9 18 6-6-6-6" />
   </svg>
-);
-
-const Stat = ({ label, value, color }) => (
-  <div>
-    <div style={{ fontSize: 11.5, color: '#94a3b8', marginBottom: 2 }}>{label}</div>
-    <div style={{ fontSize: 19, fontWeight: 800, color }}>{value}</div>
-  </div>
 );
 
 export default DriverDashboard;
