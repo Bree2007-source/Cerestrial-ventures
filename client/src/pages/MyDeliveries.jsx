@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import API_BASE_URL from '../config';
 import useSocket from '../hooks/useSocket';
+import DriverBottomNav from '../components/DriverBottomNav';
 
 // Loads Leaflet (JS + CSS) from a CDN once, the first time the map view is
 // opened — same pattern as the Poppins font loader in DriverDashboard.jsx.
@@ -557,11 +558,10 @@ const MyDeliveries = () => {
               style={{ width: '100%', height: 420, borderRadius: 14, border: `1px solid ${BORDER}`, overflow: 'hidden' }}
             />
           </div>
-        )}
-
+       )}
       </div>
+      <DriverBottomNav />
     </div>
   );
 };
-
 export default MyDeliveries;
