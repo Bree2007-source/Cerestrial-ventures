@@ -2,9 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useCart } from '../context/CartContext';
+import API_BASE_URL from '../config';
 import './Home.css';
 
-const API = import.meta.env.VITE_API_BASE_URL;
+const API = API_BASE_URL;
 
 const CATEGORIES = [
   { name: 'Sugar',           emoji: '🍬' },
