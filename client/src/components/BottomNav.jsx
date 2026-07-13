@@ -41,22 +41,25 @@ export default function BottomNav() {
   );
 }
 
+// NOTE: colors are hardcoded here instead of using var(--nav-bg) etc.
+// This removes any dependency on the theme CSS variables resolving
+// correctly, ruling that out as a possible cause of invisibility.
 const styles = {
   nav: {
     position: 'fixed', bottom: 0, left: 0, right: 0,
     height: 64, display: 'flex', alignItems: 'stretch',
-    backgroundColor: 'var(--nav-bg)',
-    borderTop: '1px solid var(--nav-border)',
-    padding: '0 4px', zIndex: 2000,
-    boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
+    backgroundColor: '#ffffff',
+    borderTop: '2px solid #15803d',
+    padding: '0 4px', zIndex: 999999,
+    boxShadow: '0 -4px 24px rgba(0,0,0,0.2)',
   },
   item: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
     justifyContent: 'center', gap: 3, textDecoration: 'none',
-    color: 'var(--text-muted)', borderRadius: 12, margin: '6px 2px',
+    color: '#64748b', borderRadius: 12, margin: '6px 2px',
     transition: 'all 0.2s', fontSize: 10, fontWeight: 500, position: 'relative',
   },
-  active: { backgroundColor: 'var(--active-bg)', color: 'var(--brand)' },
+  active: { backgroundColor: 'rgba(21,128,61,0.12)', color: '#15803d' },
   label: { fontSize: 10, fontWeight: 500 },
   activeLabel: { fontWeight: 600 },
   badge: {
@@ -64,7 +67,7 @@ const styles = {
     background: '#e24b4a', color: '#fff', fontSize: 9, fontWeight: 700,
     minWidth: 16, height: 16, borderRadius: 8, display: 'flex',
     alignItems: 'center', justifyContent: 'center', padding: '0 3px',
-    border: '2px solid var(--nav-bg)',
+    border: '2px solid #ffffff',
   },
   dot: {
     position: 'absolute', bottom: 4, left: '50%',
