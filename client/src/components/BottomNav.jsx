@@ -11,8 +11,9 @@ const navItems = [
 ];
 
 export default function BottomNav() {
-  const { cartItems } = useCart();
-  const cartCount = cartItems.reduce((sum, i) => sum + i.quantity, 0);
+  const cart = useCart() || {};
+  const cartItems = Array.isArray(cart.cartItems) ? cart.cartItems : [];
+  const cartCount = cartItems.reduce((sum, i) => sum + (i?.quantity || 0), 0);
 
   return (
     <nav style={styles.nav}>
@@ -41,9 +42,6 @@ export default function BottomNav() {
   );
 }
 
-// NOTE: colors are hardcoded here instead of using var(--nav-bg) etc.
-// This removes any dependency on the theme CSS variables resolving
-// correctly, ruling that out as a possible cause of invisibility.
 const styles = {
   nav: {
     position: 'fixed', bottom: 0, left: 0, right: 0,
