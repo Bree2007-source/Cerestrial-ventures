@@ -47,8 +47,8 @@ function InstallPrompt() {
 
   return (
     <div style={{
-      position: 'fixed', bottom: '20px', left: '50%',
-      transform: 'translateX(-50%)', zIndex: 9999,
+      position: 'fixed', bottom: '90px', left: '50%',
+      transform: 'translateX(-50%)', zIndex: 900,
       backgroundColor: '#166534', color: 'white',
       padding: '16px 20px', borderRadius: '16px',
       boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
