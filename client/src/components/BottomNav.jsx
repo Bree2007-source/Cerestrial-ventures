@@ -45,9 +45,10 @@ const styles = {
   nav: {
     position: 'fixed', bottom: 0, left: 0, right: 0,
     height: 64, display: 'flex', alignItems: 'stretch',
-    backgroundColor: 'var(--nav-bg)', borderTop: '0.5px solid var(--nav-border)',
-    padding: '0 4px', zIndex: 1000,
-    boxShadow: '0 -2px 20px rgba(0,0,0,0.08)',
+    backgroundColor: 'var(--nav-bg)',
+    borderTop: '1px solid var(--nav-border)',
+    padding: '0 4px', zIndex: 2000,
+    boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
   },
   item: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
