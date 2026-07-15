@@ -4,7 +4,7 @@ import bcrypt           from 'bcryptjs'
 import User             from '../models/User.js'
 import PasswordResetOTP from '../models/PasswordResetOTP.js'
 import SecurityLog      from '../models/SecurityLog.js'
-import { sendEmail }    from '../utils/notifications.js'
+import { sendEmail }    from '../models/notifications.js'
 
 const router = express.Router()
 

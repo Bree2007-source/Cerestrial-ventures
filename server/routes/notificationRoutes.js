@@ -4,27 +4,27 @@ import { protect } from '../middleware/adminMiddleware.js'
 
 const router = express.Router()
 
+function buildQuery(user, extraFilter = {}) {
+  if (user.isAdmin) {
+    return {
+      ...extraFilter,
+      $or: [{ userId: user._id }, { isAdminNotification: true }],
+    }
+  }
+  return {
+    ...extraFilter,
+    userId: user._id,
+    isAdminNotification: false,
+    driverId: null,
+  }
+}
+
 // GET /api/notifications
-// Returns notifications for the logged-in user
 router.get('/', protect, async (req, res) => {
   try {
-    let query
-
-    if (req.user.isAdmin) {
-      query = {
-        $or: [
-          { userId: req.user._id },
-          { isAdminNotification: true }
-        ]
-      }
-    } else {
-      query = { userId: req.user._id, isAdminNotification: false }
-    }
-
-    const notifications = await Notification.find(query)
+    const notifications = await Notification.find(buildQuery(req.user))
       .sort({ createdAt: -1 })
       .limit(50)
-
     res.json(notifications)
   } catch (error) {
     res.status(500).json({ message: error.message })
@@ -34,22 +34,18 @@ router.get('/', protect, async (req, res) => {
 // GET /api/notifications/unread-count
 router.get('/unread-count', protect, async (req, res) => {
   try {
-    let query
-
-    if (req.user.isAdmin) {
-      query = {
-        read: false,
-        $or: [
-          { userId: req.user._id },
-          { isAdminNotification: true }
-        ]
-      }
-    } else {
-      query = { userId: req.user._id, isAdminNotification: false, read: false }
-    }
-
-    const count = await Notification.countDocuments(query)
+    const count = await Notification.countDocuments(buildQuery(req.user, { read: false }))
     res.json({ count })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
+  }
+})
+
+// PATCH /api/notifications/mark-all-read  ← must be before /:id/read
+router.patch('/mark-all-read', protect, async (req, res) => {
+  try {
+    await Notification.updateMany(buildQuery(req.user, { read: false }), { read: true })
+    res.json({ message: 'All notifications marked as read' })
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -58,22 +54,11 @@ router.get('/unread-count', protect, async (req, res) => {
 // PATCH /api/notifications/:id/read
 router.patch('/:id/read', protect, async (req, res) => {
   try {
-    const query = req.user.isAdmin
-      ? {
-          _id: req.params.id,
-          $or: [
-            { userId: req.user._id },
-            { isAdminNotification: true }
-          ]
-        }
-      : { _id: req.params.id, userId: req.user._id, isAdminNotification: false }
-
     const notification = await Notification.findOneAndUpdate(
-      query,
+      { _id: req.params.id, ...buildQuery(req.user) },
       { read: true },
       { new: true }
     )
-
     if (!notification) return res.status(404).json({ message: 'Notification not found' })
     res.json(notification)
   } catch (error) {
@@ -81,25 +66,14 @@ router.patch('/:id/read', protect, async (req, res) => {
   }
 })
 
-// PATCH /api/notifications/mark-all-read
-router.patch('/mark-all-read', protect, async (req, res) => {
+// DELETE /api/notifications/:id
+router.delete('/:id', protect, async (req, res) => {
   try {
-    let query
-
-    if (req.user.isAdmin) {
-      query = {
-        read: false,
-        $or: [
-          { userId: req.user._id },
-          { isAdminNotification: true }
-        ]
-      }
-    } else {
-      query = { userId: req.user._id, isAdminNotification: false, read: false }
-    }
-
-    await Notification.updateMany(query, { read: true })
-    res.json({ message: 'All notifications marked as read' })
+    const notification = await Notification.findOneAndDelete(
+      { _id: req.params.id, ...buildQuery(req.user) }
+    )
+    if (!notification) return res.status(404).json({ message: 'Notification not found' })
+    res.json({ message: 'Deleted' })
   } catch (error) {
     res.status(500).json({ message: error.message })
   }

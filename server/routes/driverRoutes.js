@@ -9,8 +9,7 @@ const router = express.Router()
 
 // Same active-status set orderRoutes.js uses when building activeOrders
 // for the optimizer — kept in sync intentionally, not redefined.
-const ACTIVE_ORDER_STATUSES = ['Assigned to Driver', 'Driver On The Way', 'Arrived']
-
+const ACTIVE_ORDER_STATUSES = ['Assigned to Driver', 'Driver On The Way', 'Driver Arrived']
 // Minimum movement (km) before a GPS ping is considered "significant"
 // enough to justify a fresh OSRM route recompute. Below this, the raw
 // location is still saved (so live tracking on the admin map stays

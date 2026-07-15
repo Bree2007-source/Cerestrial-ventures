@@ -1,13 +1,12 @@
 import express from 'express'
 import Product from '../models/Product.js'
 import User from '../models/User.js'
-import Notification from '../models/Notification.js'
 import { protect, adminOnly } from '../middleware/adminMiddleware.js'
 import { sendEmail, sendSms } from '../utils/notifications.js'
+import { notifyAdmin } from '../utils/notifyHelpers.js'
 
 const router = express.Router()
 
-// GET all products
 router.get('/', async (req, res) => {
   try {
     const products = await Product.find({})
@@ -17,7 +16,6 @@ router.get('/', async (req, res) => {
   }
 })
 
-// GET recommended products
 router.get('/recommendations', async (req, res) => {
   try {
     const recommendations = await Product.find({})
@@ -29,7 +27,6 @@ router.get('/recommendations', async (req, res) => {
   }
 })
 
-// GET single product
 router.get('/:id', async (req, res) => {
   try {
     const product = await Product.findById(req.params.id)
@@ -40,7 +37,6 @@ router.get('/:id', async (req, res) => {
   }
 })
 
-// POST create product
 router.post('/', protect, adminOnly, async (req, res) => {
   try {
     const product = await Product.create(req.body)
@@ -50,7 +46,6 @@ router.post('/', protect, adminOnly, async (req, res) => {
   }
 })
 
-// PUT update product
 router.put('/:id', protect, adminOnly, async (req, res) => {
   try {
     const existingProduct = await Product.findById(req.params.id)
@@ -61,19 +56,29 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
 
     const prevStock = existingProduct.countInStock
     const nextStock = updatedProduct.countInStock
+    const io = req.app.get('io')
 
-    // Notify admins when stock drops to 5 or below
+    // Low stock alert
     if (nextStock <= 5 && nextStock < prevStock) {
-      await Notification.create({
-        isAdminNotification: true,
-        title: `Low Stock Alert ⚠️`,
+      await notifyAdmin(io, {
+        title:   '⚠️ Low Stock Alert',
         message: `${updatedProduct.name} is running low — only ${nextStock} unit${nextStock === 1 ? '' : 's'} left.`,
-        type: 'low_stock',
-        link: '/admin',
+        type:    'low_stock',
+        link:    '/admin',
       })
     }
 
-    // Notify users on wishlist when item is back in stock
+    // Out of stock alert
+    if (nextStock === 0 && prevStock > 0) {
+      await notifyAdmin(io, {
+        title:   '🚫 Out of Stock',
+        message: `${updatedProduct.name} is now out of stock. Please restock soon.`,
+        type:    'low_stock',
+        link:    '/admin',
+      })
+    }
+
+    // Back in stock — notify wishlist users
     if (prevStock === 0 && nextStock > 0) {
       const users = await User.find({
         'notificationPreferences.restock': true,
@@ -99,7 +104,6 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
   }
 })
 
-// POST promotion broadcast
 router.post('/promotions', protect, adminOnly, async (req, res) => {
   try {
     const { subject, message } = req.body
@@ -121,7 +125,6 @@ router.post('/promotions', protect, adminOnly, async (req, res) => {
   }
 })
 
-// DELETE product
 router.delete('/:id', protect, adminOnly, async (req, res) => {
   try {
     const product = await Product.findByIdAndDelete(req.params.id)
@@ -132,7 +135,6 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
   }
 })
 
-// POST add review
 router.post('/:id/reviews', protect, async (req, res) => {
   try {
     const product = await Product.findById(req.params.id)
@@ -143,18 +145,13 @@ router.post('/:id/reviews', protect, async (req, res) => {
       (review) => review.user.toString() === req.user._id.toString()
     )
     if (existingReview) {
-      existingReview.rating = Number(rating)
+      existingReview.rating  = Number(rating)
       existingReview.comment = comment
     } else {
-      product.reviews.push({
-        user: req.user._id,
-        name: req.user.name,
-        rating: Number(rating),
-        comment,
-      })
+      product.reviews.push({ user: req.user._id, name: req.user.name, rating: Number(rating), comment })
     }
     product.numReviews = product.reviews.length
-    product.rating = product.reviews.reduce((sum, item) => sum + item.rating, 0) / product.reviews.length
+    product.rating     = product.reviews.reduce((sum, item) => sum + item.rating, 0) / product.reviews.length
     await product.save()
     res.status(201).json({ message: 'Review submitted successfully', reviews: product.reviews })
   } catch (error) {
