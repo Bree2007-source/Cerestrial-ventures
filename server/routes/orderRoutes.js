@@ -3,6 +3,7 @@ import Order from '../models/Order.js'
 import Driver from '../models/Driver.js'
 import { protect, requireRole, requireOwnDriverRecord } from '../middleware/authMiddleware.js'
 import { optimizeRoute } from '../utils/routeOptimizer.js'
+import { getDeliverySettings, getDeliverySchedule } from '../utils/deliveryCutoff.js'
 
 const router = express.Router()
 
@@ -119,6 +120,13 @@ router.post('/', async (req, res) => {
       paymentMethod, mpesaCode, deliveryTime,
     } = req.body
 
+    // Delivery scheduling (Today vs Tomorrow) is computed here, server-side,
+    // from the admin-configured cutoff in DeliverySettings — never trusted
+    // from the client. `deliveryTime` above is a separate legacy field kept
+    // as-is; it does not gate scheduling. See server/utils/deliveryCutoff.js.
+    const deliverySettings = await getDeliverySettings()
+    const schedule = getDeliverySchedule(new Date(), deliverySettings)
+
     const order = await Order.create({
       customerName,
       phone,
@@ -132,6 +140,11 @@ router.post('/', async (req, res) => {
       mpesaCode:     mpesaCode     || '',
       deliveryTime:  deliveryTime  || 'Today',
       status:        'Pending',
+      deliveryDate:           schedule.deliveryDate,
+      deliveryWindowStart:    schedule.windowStart,
+      deliveryWindowEnd:      schedule.windowEnd,
+      cutoffTimeAtOrder:      schedule.cutoffTime,
+      deliveryScheduleStatus: schedule.deliveryScheduleStatus,
     })
 
     const io = req.app.get('io')
