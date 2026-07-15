@@ -2,7 +2,8 @@ import express from 'express'
 import Product from '../models/Product.js'
 import User from '../models/User.js'
 import { protect, adminOnly } from '../middleware/adminMiddleware.js'
-import { sendEmail, sendSms } from '../utils/notifications.js'
+import { sendEmail } from '../utils/sendEmail.js';
+import { sendSms } from '../utils/sendSms.js';
 import { notifyAdmin } from '../utils/notifyHelpers.js'
 
 const router = express.Router()
@@ -158,5 +159,6 @@ router.post('/:id/reviews', protect, async (req, res) => {
     res.status(500).json({ message: error.message })
   }
 })
+export { sendEmail };
 
 export default router
