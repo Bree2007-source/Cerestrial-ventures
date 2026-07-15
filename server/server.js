@@ -22,6 +22,7 @@ import notificationRoutes from './routes/notificationRoutes.js'
 import passwordResetRoutes from './routes/passwordResetRoutes.js'
 import securityRoutes from './routes/securityRoutes.js'
 import driverRoutes from './routes/driverRoutes.js'
+import deliverySettingsRoutes from './routes/deliverySettingsRoutes.js'
 
 import User from './models/User.js'
 
@@ -139,6 +140,7 @@ app.use('/api/notifications',  notificationRoutes)
 app.use('/api/password-reset', passwordResetRoutes)
 app.use('/api/security',       securityRoutes)
 app.use('/api/drivers',        driverRoutes)
+app.use('/api/delivery-settings', deliverySettingsRoutes)
 
 // ── Global error handler ───────────────────────────────────────────────────
 app.use((err, req, res, next) => {
