@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useCart } from '../context/CartContext';
 import { useNavigate } from 'react-router-dom';
 import API_BASE_URL from '../config';
+import useSocket from '../hooks/useSocket';
 
 const Checkout = () => {
   const { cartItems, clearCart } = useCart();
@@ -13,7 +14,9 @@ const Checkout = () => {
   const [location, setLocation]               = useState('');
   const [loading, setLoading]                 = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
-  const [deliveryTime, setDeliveryTime]       = useState('Today');
+  const [deliverySettings, setDeliverySettings] = useState(null); // from /delivery-settings/public
+  const [clockOffsetMs, setClockOffsetMs]     = useState(0); // serverNow - clientNow, to correct for device clock skew
+  const [nowTick, setNowTick]                 = useState(Date.now()); // ticks every second to drive the countdown
   const [paymentMethod, setPaymentMethod]     = useState('M-Pesa');
   const [mapVisible, setMapVisible]           = useState(false);
   const [pinnedLatLng, setPinnedLatLng]       = useState(null);
@@ -28,6 +31,66 @@ const Checkout = () => {
   const markerRef       = useRef(null);
   const mapInstanceRef  = useRef(null);
   const pinnedLatLngRef = useRef(null);
+
+  // ── Delivery cutoff/schedule: fetch once, then keep live ──────────────
+  const socket = useSocket();
+
+  const fetchDeliverySettings = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/delivery-settings/public`);
+      const data = await res.json();
+      if (res.ok) {
+        setDeliverySettings(data);
+        // data.nowISO is the server's clock at the moment it responded —
+        // comparing it to our own Date.now() lets the countdown stay
+        // accurate even if the customer's device clock is off.
+        setClockOffsetMs(new Date(data.nowISO).getTime() - Date.now());
+      }
+    } catch (err) {
+      console.error('Error fetching delivery settings:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchDeliverySettings();
+  }, []);
+
+  // Live countdown — ticks every second while the checkout page is open.
+  useEffect(() => {
+    const interval = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // If the admin changes the cutoff/window while this page is open, pick
+  // it up immediately — no reload needed.
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (payload) => {
+      setDeliverySettings(payload);
+      setClockOffsetMs(new Date(payload.nowISO).getTime() - Date.now());
+    };
+    socket.on('delivery_settings_updated', handler);
+    return () => socket.off('delivery_settings_updated', handler);
+  }, [socket]);
+
+  // Derived schedule info recomputed every tick — never stored in state
+  // directly, so it can't go stale relative to nowTick/deliverySettings.
+  const deliverySchedule = (() => {
+    if (!deliverySettings) return null;
+    const correctedNow = nowTick + clockOffsetMs;
+    const cutoffMs = new Date(deliverySettings.cutoffISO).getTime();
+    const msRemaining = Math.max(0, cutoffMs - correctedNow);
+    const isPastCutoff = correctedNow >= cutoffMs;
+    const totalSeconds = Math.floor(msRemaining / 1000);
+    const hh = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+    const ss = String(totalSeconds % 60).padStart(2, '0');
+    return {
+      isPastCutoff,
+      countdownLabel: `${hh}:${mm}:${ss}`,
+      deliveryDayLabel: isPastCutoff ? 'Tomorrow' : 'Today',
+    };
+  })();
 
   // ── On mount: load user info + try saved location first ───────────
   useEffect(() => {
@@ -308,7 +371,6 @@ const Checkout = () => {
         phone:        formatPhone(phone),
         location,
         coordinates:  coords ? { lat: coords.lat, lng: coords.lng } : null,
-        deliveryTime,
         totalAmount,
         paymentMethod,
         items:        itemsToOrder,
@@ -606,17 +668,52 @@ const Checkout = () => {
             )}
           </div>
 
-          {/* Delivery Time */}
+          {/* Delivery Information — automatic, based on the admin-configured cutoff time */}
           <div style={{ marginBottom: '20px' }}>
-            <label style={labelStyle}>Delivery Time</label>
-            <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
-              {['Today', 'Tomorrow'].map(option => (
-                <button key={option} type="button" onClick={() => setDeliveryTime(option)}
-                  style={{ flex: 1, padding: '12px', borderRadius: '10px', border: `2px solid ${deliveryTime === option ? '#15803d' : '#e2e8f0'}`, backgroundColor: deliveryTime === option ? '#dcfce7' : 'white', color: deliveryTime === option ? '#15803d' : '#64748b', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' }}>
-                  {option === 'Today' ? '⚡ Today' : '📅 Tomorrow'}
-                </button>
-              ))}
-            </div>
+            <label style={labelStyle}>Delivery Information</label>
+            {!deliverySettings ? (
+              <div style={{ marginTop: '8px', padding: '12px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', color: '#64748b' }}>
+                Loading delivery schedule...
+              </div>
+            ) : (
+              <div style={{
+                marginTop: '8px', padding: '16px', borderRadius: '10px',
+                border: `2px solid ${deliverySchedule.isPastCutoff ? '#f59e0b' : '#15803d'}`,
+                backgroundColor: deliverySchedule.isPastCutoff ? '#fffbeb' : '#f0fdf4',
+              }}>
+                <div style={{ fontWeight: 800, fontSize: '14px', color: deliverySchedule.isPastCutoff ? '#92400e' : '#166534', marginBottom: '10px' }}>
+                  {deliverySchedule.isPastCutoff
+                    ? "⏰ Today's delivery window has closed"
+                    : `⚡ Order before ${deliverySettings.cutoffTimeLabel} for delivery today`}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '13px' }}>
+                  <div>
+                    <div style={{ color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Delivery</div>
+                    <div style={{ fontWeight: 700, color: '#1e293b' }}>{deliverySchedule.deliveryDayLabel}</div>
+                  </div>
+                  <div>
+                    <div style={{ color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Estimated Window</div>
+                    <div style={{ fontWeight: 700, color: '#1e293b' }}>{deliverySettings.windowStartLabel} – {deliverySettings.windowEndLabel}</div>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px dashed #cbd5e1' }}>
+                  {deliverySchedule.isPastCutoff ? (
+                    <div style={{ fontSize: '13px', color: '#92400e' }}>
+                      Your order has been scheduled for <strong>tomorrow</strong>.
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '13px', color: '#166534' }}>
+                      Today's delivery closes in{' '}
+                      <strong style={{ fontVariantNumeric: 'tabular-nums', fontSize: '15px' }}>
+                        {deliverySchedule.countdownLabel}
+                      </strong>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ── SIMPLIFIED: Payment Method (just 2 simple options) ── */}
@@ -657,9 +754,11 @@ const Checkout = () => {
         <div style={{ backgroundColor: 'white', padding: '25px', borderRadius: '12px', border: '1px solid #e2e8f0', height: 'fit-content' }}>
           <h3 style={{ marginTop: 0, color: '#1e293b' }}>📋 Order Summary</h3>
           <div style={{ display: 'flex', gap: '8px', marginBottom: '15px', flexWrap: 'wrap' }}>
-            <span style={{ backgroundColor: '#dcfce7', color: '#15803d', fontSize: '12px', fontWeight: 'bold', padding: '4px 12px', borderRadius: '20px' }}>
-              {deliveryTime === 'Today' ? '⚡ Delivery Today' : '📅 Delivery Tomorrow'}
-            </span>
+            {deliverySchedule && (
+              <span style={{ backgroundColor: '#dcfce7', color: '#15803d', fontSize: '12px', fontWeight: 'bold', padding: '4px 12px', borderRadius: '20px' }}>
+                {deliverySchedule.deliveryDayLabel === 'Today' ? '⚡ Delivery Today' : '📅 Delivery Tomorrow'}
+              </span>
+            )}
             <span style={{ backgroundColor: '#dbeafe', color: '#1d4ed8', fontSize: '12px', fontWeight: 'bold', padding: '4px 12px', borderRadius: '20px' }}>
               {paymentMethod === 'M-Pesa' ? '📱 M-Pesa' : '💵 Cash'}
             </span>

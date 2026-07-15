@@ -1,8 +1,10 @@
 import { io } from 'socket.io-client'
+import { API_HOST } from './config'
 
-// Connect to your backend
-const BACKEND_URL = import.meta.env.VITE_API_URL?.replace('/api', '')
-  || 'http://localhost:5000'
+// Connect to your backend — derived from the same API_BASE_URL as every
+// other request (see config.js), so socket and REST calls always target
+// the same backend instead of silently drifting apart.
+const BACKEND_URL = API_HOST
 
 const socket = io(BACKEND_URL, {
   autoConnect: true,

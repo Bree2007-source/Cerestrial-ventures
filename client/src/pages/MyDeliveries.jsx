@@ -50,12 +50,12 @@ const getPaymentMeta = (status) => {
 };
 
 const STATUS_META = {
-  'Assigned to Driver': { label: 'Ready',        dot: '🟢', bg: '#dcfce7', color: '#166534' },
-  'Driver On The Way':  { label: 'In Progress', dot: '🚚', bg: '#ede9fe', color: '#6d28d9' },
-  Arrived:               { label: 'In Progress', dot: '🚚', bg: '#ede9fe', color: '#6d28d9' },
-  Delivered:             { label: 'Delivered',   dot: '✅', bg: '#dcfce7', color: '#166534' },
+  'Assigned to Driver': { label: 'Assigned',    dot: '🔵', bg: '#dbeafe', color: '#1d4ed8' },
+  'Driver On The Way':  { label: 'In Progress', dot: '🟣', bg: '#ede9fe', color: '#6d28d9' },
+  Arrived:               { label: 'In Progress', dot: '🟣', bg: '#ede9fe', color: '#6d28d9' },
+  Delivered:             { label: 'Delivered',   dot: '🟢', bg: '#dcfce7', color: '#166534' },
 };
-const getStatusMeta = (status) => STATUS_META[status] || { label: status || 'Ready', dot: '🟢', bg: '#dcfce7', color: '#166534' };
+const getStatusMeta = (status) => STATUS_META[status] || { label: status || 'Assigned', dot: '🔵', bg: '#dbeafe', color: '#1d4ed8' };
 
 // Keeps just the first comma-separated segment of a full address for the
 // card's short-location line — the full address stays in Delivery Details.
@@ -115,8 +115,6 @@ const MyDeliveries = () => {
         throw new Error(data.message || 'Could not load your deliveries.');
       }
 
-      // Route order is a display recommendation only (nearest stop first) —
-      // it never restricts which stop a driver is allowed to act on.
       const sortedDeliveries = [...(Array.isArray(data) ? data : [])].sort((a, b) => {
         const distA = typeof a.routeDistanceKm === 'number' ? a.routeDistanceKm : Number.MAX_SAFE_INTEGER;
         const distB = typeof b.routeDistanceKm === 'number' ? b.routeDistanceKm : Number.MAX_SAFE_INTEGER;
@@ -142,51 +140,6 @@ const MyDeliveries = () => {
     fetchDeliveries();
   }, [fetchDeliveries]);
 
-  // ── Auto-recompute if distances are missing ───────────────────────────
-  // GET /drivers/:id/orders recomputes the route server-side on every call
-  // (see recomputeDriverRoute in orderRoutes.js), so a missing
-  // routeDistanceKm here means that recompute didn't produce a value yet —
-  // e.g. the driver's GPS fix hadn't landed, or the OSRM call failed for
-  // one stop. Rather than leaving the list unsorted/showing "Calculating..."
-  // forever, refetch (which re-triggers the backend recompute) a few times
-  // with backoff before giving up.
-  const distanceRetryCountRef = useRef(0);
-  const distanceRetryTimeoutRef = useRef(null);
-  const [routeRecomputing, setRouteRecomputing] = useState(false);
-
-  useEffect(() => {
-    if (loadingDeliveries) return;
-    if (deliveries.length === 0) {
-      distanceRetryCountRef.current = 0;
-      setRouteRecomputing(false);
-      return;
-    }
-
-    const missingDistance = deliveries.some((d) => typeof d.routeDistanceKm !== 'number');
-
-    if (!missingDistance) {
-      distanceRetryCountRef.current = 0;
-      setRouteRecomputing(false);
-      return;
-    }
-
-    if (distanceRetryCountRef.current >= 4) {
-      // Backend genuinely can't compute this yet (e.g. no GPS fix at all) —
-      // stop hammering it and just show the "Calculating..." fallback.
-      setRouteRecomputing(false);
-      return;
-    }
-
-    distanceRetryCountRef.current += 1;
-    setRouteRecomputing(true);
-    distanceRetryTimeoutRef.current = setTimeout(() => {
-      fetchDeliveries();
-    }, 2000 * distanceRetryCountRef.current); // 2s, 4s, 6s, 8s backoff
-
-    return () => clearTimeout(distanceRetryTimeoutRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deliveries, loadingDeliveries]);
-
   useEffect(() => {
     if (!socket || !user?._id) return;
 
@@ -203,7 +156,7 @@ const MyDeliveries = () => {
   const getShopName = (delivery) => delivery.shopName || delivery.shop?.name || delivery.businessName || delivery.location || 'Shop';
 
   // ── Display-only sort + search — never touches the real route order used
-  // for navigation, which is set entirely by the backend as a recommendation.
+  // for navigation/locking, which is set entirely by the backend.
   const sortedForDisplay = useMemo(() => {
     const list = [...deliveries];
     if (sortBy === 'shop') {
@@ -388,20 +341,11 @@ const MyDeliveries = () => {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', fontSize: 13.5, fontWeight: 700 }}>
             <span>🚚 {loadingDeliveries ? '—' : `${deliveries.length} Stops`}</span>
             <span style={{ color: GREEN }}>
-              📍 {loadingDeliveries
-                ? '—'
-                : hasDistanceData
-                  ? `Total Route: ${totalDistanceKm.toFixed(1)} km`
-                  : routeRecomputing
-                    ? 'Updating route...'
-                    : 'Distance unavailable'}
+              📍 {loadingDeliveries ? '—' : hasDistanceData ? `Total Route: ${totalDistanceKm.toFixed(1)} km` : 'Calculating route...'}
             </span>
             {!loadingDeliveries && hasDurationData && (
               <span style={{ color: MUTED }}>🕒 ETA: {formatDuration(totalDurationMin)}</span>
             )}
-          </div>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
-            Suggested order — you can start any stop below, any time.
           </div>
         </div>
 
@@ -444,11 +388,6 @@ const MyDeliveries = () => {
         {/* ── List view ── */}
         {view === 'list' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {!loadingDeliveries && displayDeliveries.length > 0 && sortBy === 'distance' && (
-              <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 600, marginBottom: -2 }}>
-                📍 Recommended Order (Nearest First)
-              </div>
-            )}
             {loadingDeliveries ? (
               <>
                 <SkeletonCard />
@@ -468,9 +407,7 @@ const MyDeliveries = () => {
             ) : (
               displayDeliveries.map((delivery) => {
                 const routeIndex   = deliveries.findIndex((d) => d._id === delivery._id);
-                const distanceText = typeof delivery.routeDistanceKm === 'number'
-                  ? `${delivery.routeDistanceKm.toFixed(1)} km`
-                  : routeRecomputing ? 'Updating...' : 'Distance unavailable';
+                const distanceText = typeof delivery.routeDistanceKm === 'number' ? `${delivery.routeDistanceKm.toFixed(1)} km` : 'Calculating...';
                 const paymentMeta  = getPaymentMeta(delivery.paymentStatus);
                 const statusMeta   = getStatusMeta(delivery.status);
                 const isDelivered  = delivery.status === 'Delivered';
@@ -534,7 +471,7 @@ const MyDeliveries = () => {
                         {startingId === delivery._id
                           ? 'Starting…'
                           : isDelivered
-                            ? '✅ Delivered'
+                            ? '✓ Delivered'
                             : '▶ Start Delivery'}
                       </button>
                     </div>
@@ -558,10 +495,12 @@ const MyDeliveries = () => {
               style={{ width: '100%', height: 420, borderRadius: 14, border: `1px solid ${BORDER}`, overflow: 'hidden' }}
             />
           </div>
-       )}
+        )}
+
       </div>
       <DriverBottomNav />
     </div>
   );
 };
+
 export default MyDeliveries;

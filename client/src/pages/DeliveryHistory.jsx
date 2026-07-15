@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useContext } from 'react';
 import axios from 'axios';
 import { AuthContext } from '../context/AuthContext';
+import DriverBottomNav from '../components/DriverBottomNav';
 
 const DeliveryHistory = () => {
   const [history, setHistory] = useState([]);
@@ -19,7 +20,7 @@ const DeliveryHistory = () => {
   }, [user]);
 
   return (
-    <div className="p-4 bg-gray-50 min-h-screen">
+    <div className="p-4 pb-24 bg-gray-50 min-h-screen">
       <h2 className="text-xl font-bold mb-4">Delivery History</h2>
       {history.map((order) => (
         <div key={order._id} className="bg-white p-4 mb-3 rounded-lg shadow-sm border">
@@ -33,6 +34,7 @@ const DeliveryHistory = () => {
           <p className="font-medium mt-1">Total: KSh {order.totalAmount}</p>
         </div>
       ))}
+      <DriverBottomNav />
     </div>
   );
 };

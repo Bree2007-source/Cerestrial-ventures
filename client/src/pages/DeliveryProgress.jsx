@@ -191,6 +191,20 @@ const DeliveryProgress = () => {
     let cancelled = false;
     loadLeaflet().then((L) => {
       if (cancelled || !L || !mapContainerRef.current || mapRef.current) return;
+
+      // React 18 StrictMode runs effects mount → cleanup → mount again in
+      // development. The cleanup below calls mapRef.current.remove(), which
+      // detaches Leaflet from the container but can race with the second
+      // mount's loadLeaflet().then() callback. If that happens, Leaflet
+      // still sees its internal `_leaflet_id` flag on the DOM node and
+      // throws ("Map container is already initialized"), which aborts this
+      // callback and leaves the map (and every marker/line drawn onto it)
+      // never created — reading as the whole thing "flickering" in and out
+      // on load. Clearing the stale flag makes re-init safe either way.
+      if (mapContainerRef.current._leaflet_id) {
+        delete mapContainerRef.current._leaflet_id;
+      }
+
       mapRef.current = L.map(mapContainerRef.current, { zoomControl: true }).setView([-1.286389, 36.817223], 13);
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '© OpenStreetMap contributors © CARTO',
@@ -264,24 +278,43 @@ const DeliveryProgress = () => {
     }
   }, [destCoords, mapReady]);
 
-  const hasFitOnceRef = useRef(false);
+  // Route line — update the existing polyline's points in place instead of
+  // removing and re-adding the layer. Previously this effect also depended
+  // on effectiveDriverPos/destCoords, so it re-ran (and destroyed + rebuilt
+  // the whole line) on every single GPS tick, not just when the route
+  // itself changed — that was the actual source of the "flickering" line,
+  // on top of it also flashing on every ~20s/50m route refresh below.
   useEffect(() => {
     const L = window.L;
     if (!L || !mapReady || !mapRef.current) return;
 
-    if (routeLineRef.current) {
-      mapRef.current.removeLayer(routeLineRef.current);
-      routeLineRef.current = null;
-    }
-    if (routeInfo?.latlngs?.length) {
-      routeLineRef.current = L.polyline(routeInfo.latlngs, { color: '#3B82F6', weight: 5, opacity: 0.9 }).addTo(mapRef.current);
+    if (!routeInfo?.latlngs?.length) {
+      if (routeLineRef.current) {
+        mapRef.current.removeLayer(routeLineRef.current);
+        routeLineRef.current = null;
+      }
+      return;
     }
 
+    if (routeLineRef.current) {
+      routeLineRef.current.setLatLngs(routeInfo.latlngs);
+    } else {
+      routeLineRef.current = L.polyline(routeInfo.latlngs, { color: '#3B82F6', weight: 5, opacity: 0.9 }).addTo(mapRef.current);
+    }
+  }, [routeInfo, mapReady]);
+
+  // Fit the map to driver + destination once, the first time both are
+  // known. Split out from the line-drawing effect above so driver GPS
+  // ticks (which change effectiveDriverPos far more often than the route
+  // itself changes) can't retrigger polyline recreation.
+  const hasFitOnceRef = useRef(false);
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
     if (!hasFitOnceRef.current && effectiveDriverPos && destCoords) {
       recenterMap();
       hasFitOnceRef.current = true;
     }
-  }, [routeInfo, mapReady, effectiveDriverPos, destCoords, recenterMap]);
+  }, [mapReady, effectiveDriverPos, destCoords, recenterMap]);
 
   const handleNavigateExternal = () => {
     if (!destCoords) return;

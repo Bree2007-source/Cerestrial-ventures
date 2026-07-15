@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import API_BASE_URL from '../config';
 import { useAuth } from '../context/AuthContext';
+import DriverBottomNav from '../components/DriverBottomNav';
 
 const PaymentConfirmation = () => {
   const navigate = useNavigate();
@@ -139,7 +140,7 @@ const PaymentConfirmation = () => {
   };
 
   return (
-    <div className="max-w-md mx-auto p-6 bg-white min-h-screen">
+    <div className="max-w-md mx-auto p-6 pb-24 bg-white min-h-screen">
       <h2 className="text-xl font-bold mb-6">Payment Confirmation</h2>
 
       {error && (
@@ -233,6 +234,7 @@ const PaymentConfirmation = () => {
           )}
         </>
       )}
+      <DriverBottomNav />
     </div>
   );
 };

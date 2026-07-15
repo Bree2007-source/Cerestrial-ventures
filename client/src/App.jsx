@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation, Navigate } from "react-router-dom";
 
 // Existing Imports
 import Home from "./pages/Home";
@@ -58,6 +58,15 @@ function AppRoutes() {
 
   const [selectedCategory, setSelectedCategory] = useState('All');
   const isHidden = hiddenPaths.some(path => location.pathname.startsWith(path));
+
+  // Driver accounts have no reason to browse the customer storefront —
+  // and every customer-facing route (Home, Categories, Cart, etc.) has no
+  // DriverBottomNav, so a driver landing here always ended up with no
+  // navigation at all. Redirect them straight to their dashboard instead,
+  // for ANY customer-facing path, not just after login.
+  if (user?.role === 'driver' && !isHidden) {
+    return <Navigate to="/driver-dashboard" replace />;
+  }
 
   return (
     <div style={{ minHeight: '100vh', paddingBottom: isHidden ? 0 : '92px' }}>

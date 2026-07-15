@@ -39,6 +39,16 @@ const STATUS_META = {
 
 const ALL_STATUSES = Object.keys(STATUS_META);
 
+// Delivery-cutoff scheduling (server-stamped: o.deliveryScheduleStatus).
+// Orders placed before this feature shipped won't have this field — treated
+// as "unscheduled" rather than guessed at.
+const SCHEDULE_META = {
+  'TODAY':     { color: '#166534', bg: '#dcfce7', label: 'Today' },
+  'TOMORROW':  { color: '#b45309', bg: '#fef3c7', label: 'Tomorrow' },
+  'SCHEDULED': { color: '#5b21b6', bg: '#ede9fe', label: 'Scheduled' },
+};
+const getScheduleBadge = (o) => SCHEDULE_META[o.deliveryScheduleStatus] || null;
+
 const getStatusStyle = (status) => {
   const m = STATUS_META[status] || { color: '#64748b', bg: '#f1f5f9', label: status };
   return { backgroundColor: m.bg, color: m.color, padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', display: 'inline-block' };
@@ -277,9 +287,10 @@ const AdminDashboard = () => {
   const [bulkAssigning, setBulkAssigning]       = useState(false);
 
   // Orders tab state
-  const [orderSearch, setOrderSearch]   = useState('');
-  const [orderStatus, setOrderStatus]   = useState('');
-  const [orderDate, setOrderDate]       = useState('');
+  const [orderSearch, setOrderSearch]     = useState('');
+  const [orderStatus, setOrderStatus]     = useState('');
+  const [orderDate, setOrderDate]         = useState('');
+  const [orderSchedule, setOrderSchedule] = useState(''); // '', 'TODAY', 'TOMORROW', 'SCHEDULED'
   const [orderPage, setOrderPage]       = useState(1);
   const ORDER_PAGE_SIZE = 20;
 
@@ -309,6 +320,11 @@ const AdminDashboard = () => {
   const [promoSubject, setPromoSubject] = useState('');
   const [promoBody, setPromoBody]       = useState('');
   const [promoSending, setPromoSending] = useState(false);
+
+  // Delivery cutoff settings state
+  const [deliverySettingsForm, setDeliverySettingsForm] = useState({ cutoffTime: '', windowStart: '', windowEnd: '' });
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving]   = useState(false);
 
   // ── Toast helper ───────────────────────────────────────────────────────────
   const showToast = useCallback((msg, type = 'success') => {
@@ -352,8 +368,19 @@ const AdminDashboard = () => {
     } catch {}
   }, []);
 
+  const fetchDeliverySettings = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/delivery-settings`, { headers: authHdr() });
+      if (r.ok) {
+        const d = await r.json();
+        setDeliverySettingsForm({ cutoffTime: d.cutoffTime, windowStart: d.windowStart, windowEnd: d.windowEnd });
+      }
+    } catch {}
+    finally { setSettingsLoading(false); }
+  }, []);
+
   useEffect(() => {
-    Promise.all([fetchOrders(), fetchProducts(), fetchAnalytics(), fetchCustomers(), fetchDrivers()])
+    Promise.all([fetchOrders(), fetchProducts(), fetchAnalytics(), fetchCustomers(), fetchDrivers(), fetchDeliverySettings()])
       .finally(() => setLoading(false));
 
     const refreshDashboard = () => {
@@ -373,7 +400,7 @@ const AdminDashboard = () => {
       socket.off('driver_status_changed', refreshDashboard);
       clearInterval(poll);
     };
-  }, [fetchOrders, fetchProducts, fetchAnalytics, fetchCustomers, fetchDrivers]);
+  }, [fetchOrders, fetchProducts, fetchAnalytics, fetchCustomers, fetchDrivers, fetchDeliverySettings]);
 
   // ── Sales summary ──────────────────────────────────────────────────────────
   const computeSalesRange = useCallback(() => {
@@ -427,6 +454,13 @@ const AdminDashboard = () => {
   const outOfStock      = products.filter(p => (p.countInStock || 0) === 0);
   const todayRevenue    = todayOrders.filter(o => o.status !== 'Cancelled').reduce((s, o) => s + (o.totalAmount || 0), 0);
 
+  // Delivery-cutoff scheduling counts (from o.deliveryScheduleStatus, stamped
+  // server-side at order creation) — distinct from todayOrders above, which
+  // is based on when the order was PLACED, not when it's due for delivery.
+  const scheduleTodayCount     = orders.filter(o => o.deliveryScheduleStatus === 'TODAY').length;
+  const scheduleTomorrowCount  = orders.filter(o => o.deliveryScheduleStatus === 'TOMORROW').length;
+  const scheduleScheduledCount = orders.filter(o => o.deliveryScheduleStatus === 'SCHEDULED').length;
+
   // Last 6 months chart data
   const months = Array.from({ length: 6 }, (_, i) => {
     const d = new Date();
@@ -460,9 +494,10 @@ const AdminDashboard = () => {
   const filteredOrders = orders.filter(o => {
     const q = orderSearch.toLowerCase();
     const matchSearch = !q || o.customerName?.toLowerCase().includes(q) || o.phone?.includes(q) || o._id?.toLowerCase().includes(q) || o.email?.toLowerCase().includes(q);
-    const matchStatus = !orderStatus || o.status === orderStatus;
-    const matchDate   = !orderDate   || new Date(o.createdAt).toDateString() === new Date(orderDate).toDateString();
-    return matchSearch && matchStatus && matchDate;
+    const matchStatus   = !orderStatus   || o.status === orderStatus;
+    const matchDate     = !orderDate     || new Date(o.createdAt).toDateString() === new Date(orderDate).toDateString();
+    const matchSchedule = !orderSchedule || o.deliveryScheduleStatus === orderSchedule;
+    return matchSearch && matchStatus && matchDate && matchSchedule;
   });
   const paginatedOrders = filteredOrders.slice((orderPage - 1) * ORDER_PAGE_SIZE, orderPage * ORDER_PAGE_SIZE);
   const totalPages      = Math.ceil(filteredOrders.length / ORDER_PAGE_SIZE);
@@ -634,6 +669,23 @@ const AdminDashboard = () => {
     finally { setPromoSending(false); }
   };
 
+  const saveDeliverySettings = async () => {
+    const { cutoffTime, windowStart, windowEnd } = deliverySettingsForm;
+    if (!cutoffTime || !windowStart || !windowEnd) { showToast('All three times are required', 'warning'); return; }
+    setSettingsSaving(true);
+    try {
+      const r = await fetch(`${API_BASE_URL}/delivery-settings`, { method: 'PUT', headers: jsonHdr(), body: JSON.stringify({ cutoffTime, windowStart, windowEnd }) });
+      const d = await r.json();
+      if (r.ok) {
+        setDeliverySettingsForm({ cutoffTime: d.cutoffTime, windowStart: d.windowStart, windowEnd: d.windowEnd });
+        showToast('Delivery cutoff settings updated — checkout will reflect this immediately');
+      } else {
+        showToast(d.message || 'Failed to update delivery settings', 'error');
+      }
+    } catch { showToast('Network error', 'error'); }
+    finally { setSettingsSaving(false); }
+  };
+
   // ── Export helpers ─────────────────────────────────────────────────────────
   const exportSalesCSV = () => {
     const rows = [['Product', 'Qty Sold', 'Revenue (KSh)', 'Orders']];
@@ -663,6 +715,7 @@ const AdminDashboard = () => {
     { key: 'customers',  icon: '👥', label: `Customers (${customers.length})` },
     { key: 'drivers',    icon: '🚴', label: 'Drivers' },
     { key: 'promotions', icon: '📣', label: 'Promotions' },
+    { key: 'settings',   icon: '⏱️', label: 'Delivery Settings' },
   ];
 
   return (
@@ -807,6 +860,41 @@ const AdminDashboard = () => {
         {/* ═══════════════════════════════════════ ORDERS ════════════════════ */}
         {tab === 'orders' && (
           <>
+            {/* Delivery schedule summary — Today's / Tomorrow's / Scheduled Orders */}
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+              {[
+                { key: 'TODAY',     label: "Today's Orders",     count: scheduleTodayCount,     icon: '⚡' },
+                { key: 'TOMORROW',  label: "Tomorrow's Orders",  count: scheduleTomorrowCount,  icon: '📅' },
+                { key: 'SCHEDULED', label: 'Scheduled Orders',   count: scheduleScheduledCount, icon: '🗓️' },
+              ].map(chip => {
+                const meta   = SCHEDULE_META[chip.key];
+                const active = orderSchedule === chip.key;
+                return (
+                  <button
+                    key={chip.key}
+                    onClick={() => { setOrderSchedule(active ? '' : chip.key); setOrderPage(1); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '10px 16px', borderRadius: 10, cursor: 'pointer',
+                      border: `1.5px solid ${active ? meta.color : '#e2e8f0'}`,
+                      background: active ? meta.bg : 'white',
+                      color: active ? meta.color : '#334155',
+                      fontSize: 13, fontWeight: 700,
+                    }}
+                    title={`Show only ${meta.label.toLowerCase()} deliveries`}
+                  >
+                    <span>{chip.icon}</span>
+                    <span>{chip.label}</span>
+                    <span style={{
+                      background: active ? meta.color : '#f1f5f9',
+                      color: active ? 'white' : '#64748b',
+                      borderRadius: 999, padding: '1px 8px', fontSize: 12,
+                    }}>{chip.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Filters */}
             <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '16px 20px', marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <div style={{ flex: '1 1 180px' }}>
@@ -824,7 +912,16 @@ const AdminDashboard = () => {
                 <label style={lStyle}>Date</label>
                 <input type="date" value={orderDate} onChange={e => { setOrderDate(e.target.value); setOrderPage(1); }} style={iStyle} />
               </div>
-              <button onClick={() => { setOrderSearch(''); setOrderStatus(''); setOrderDate(''); setOrderPage(1); }} style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', color: '#64748b', cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}>
+              <div style={{ flex: '0 1 160px' }}>
+                <label style={lStyle}>Delivery</label>
+                <select value={orderSchedule} onChange={e => { setOrderSchedule(e.target.value); setOrderPage(1); }} style={iStyle}>
+                  <option value="">All deliveries</option>
+                  <option value="TODAY">Today</option>
+                  <option value="TOMORROW">Tomorrow</option>
+                  <option value="SCHEDULED">Scheduled</option>
+                </select>
+              </div>
+              <button onClick={() => { setOrderSearch(''); setOrderStatus(''); setOrderDate(''); setOrderSchedule(''); setOrderPage(1); }} style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', color: '#64748b', cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}>
                 Clear filters
               </button>
             </div>
@@ -866,14 +963,14 @@ const AdminDashboard = () => {
                           style={{ cursor: pageEligibleIds.length ? 'pointer' : 'default' }}
                         />
                       </th>
-                      {['Order', 'Customer', 'Items', 'Total', 'Location', 'Date', 'Status', 'Assigned Driver', 'Actions'].map(h => (
+                      {['Order', 'Customer', 'Items', 'Total', 'Location', 'Date', 'Delivery', 'Status', 'Assigned Driver', 'Actions'].map(h => (
                         <th key={h} style={{ padding: '12px 14px', textAlign: 'left', color: '#475569', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {paginatedOrders.length === 0 ? (
-                      <tr><td colSpan={10} style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>No orders match your filters.</td></tr>
+                      <tr><td colSpan={11} style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>No orders match your filters.</td></tr>
                     ) : paginatedOrders.map(o => (
                       <tr key={o._id} className="row-hover" style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ padding: '12px 10px' }}>
@@ -911,6 +1008,20 @@ const AdminDashboard = () => {
                         <td style={{ padding: '12px 14px', fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>
                           {new Date(o.createdAt).toLocaleDateString('en-KE')}<br />
                           <span style={{ color: '#94a3b8' }}>{new Date(o.createdAt).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' })}</span>
+                        </td>
+                        <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                          {getScheduleBadge(o) ? (
+                            <>
+                              <span style={{ ...getStatusStyle('__none__'), backgroundColor: getScheduleBadge(o).bg, color: getScheduleBadge(o).color }}>
+                                {getScheduleBadge(o).label}
+                              </span>
+                              {o.deliveryDate && (
+                                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{o.deliveryDate}</div>
+                              )}
+                            </>
+                          ) : (
+                            <span style={{ fontSize: 11, color: '#94a3b8' }}>—</span>
+                          )}
                         </td>
                         <td style={{ padding: '12px 14px' }}>
                           <select
@@ -1274,6 +1385,70 @@ const AdminDashboard = () => {
                 </button>
                 <button onClick={() => { setPromoSubject(''); setPromoBody(''); }} style={{ padding: '12px 20px', background: 'white', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>Clear</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════ DELIVERY SETTINGS ═════════ */}
+        {tab === 'settings' && (
+          <div style={{ maxWidth: 680 }}>
+            <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 12, padding: '24px' }}>
+              <h3 style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 700, color: '#0f172a' }}>⏱️ Daily Delivery Cutoff</h3>
+              <p style={{ margin: '0 0 24px', fontSize: 13, color: '#64748b' }}>
+                Orders placed before the cutoff time are scheduled for today's delivery; orders placed at or after it are
+                automatically scheduled for tomorrow. This applies immediately across checkout, order creation, and the
+                Orders tab — no code changes or redeploy needed.
+              </p>
+
+              {settingsLoading ? (
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>Loading current settings…</div>
+              ) : (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 20 }}>
+                    <div>
+                      <label style={lStyle}>Cutoff time *</label>
+                      <input
+                        type="time"
+                        value={deliverySettingsForm.cutoffTime}
+                        onChange={e => setDeliverySettingsForm(f => ({ ...f, cutoffTime: e.target.value }))}
+                        style={iStyle}
+                      />
+                      <small style={{ color: '#94a3b8', fontSize: 11 }}>Orders after this time move to tomorrow</small>
+                    </div>
+                    <div>
+                      <label style={lStyle}>Delivery window start *</label>
+                      <input
+                        type="time"
+                        value={deliverySettingsForm.windowStart}
+                        onChange={e => setDeliverySettingsForm(f => ({ ...f, windowStart: e.target.value }))}
+                        style={iStyle}
+                      />
+                    </div>
+                    <div>
+                      <label style={lStyle}>Delivery window end *</label>
+                      <input
+                        type="time"
+                        value={deliverySettingsForm.windowEnd}
+                        onChange={e => setDeliverySettingsForm(f => ({ ...f, windowEnd: e.target.value }))}
+                        style={iStyle}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button
+                      onClick={saveDeliverySettings}
+                      disabled={settingsSaving}
+                      style={{ padding: '12px 28px', background: settingsSaving ? '#86efac' : '#166534', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: settingsSaving ? 'not-allowed' : 'pointer', fontSize: 14 }}
+                    >
+                      {settingsSaving ? '💾 Saving…' : '💾 Save settings'}
+                    </button>
+                    <button onClick={fetchDeliverySettings} style={{ padding: '12px 20px', background: 'white', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>
+                      Revert to saved
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}

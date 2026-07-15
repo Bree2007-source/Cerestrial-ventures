@@ -148,7 +148,11 @@ export default defineConfig({
         ]
       },
       devOptions: {
-        enabled: true
+        // Disabled for local development — a dev-mode service worker was
+        // precaching old bundles (including old API URLs) and silently
+        // serving them even after source changes and server restarts.
+        // Re-enable when you specifically need to test PWA/offline behavior.
+        enabled: false
       }
     })
   ]
